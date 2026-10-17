@@ -1,0 +1,29 @@
+import { randomUUID } from "node:crypto";
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { DomainError } from "@koolezt/domain";
+import type { ExternalMediaDeliveryProvider, ExternalMediaReference, GeneratedAsset, StorageProvider } from "@koolezt/domain";
+
+type DurableStore = { findAvailable(operationId: string, assetId: string, sha256: string): Promise<{ object_key: string; content_type: string; byte_size: string | number; expires_at: Date | string } | undefined>; create(input: Readonly<{ projectId: string; operationId: string; assetId: string; backend: string; bucket: string; objectKey: string; contentType: string; byteSize: number; sha256: string; expiresAt: string }>): Promise<void>; claim?(input: Parameters<DurableStore["create"]>[0]): Promise<{ id: string; object_key: string }>; markAvailable?(id: string): Promise<void>; markUploadFailed?(id: string,error:string): Promise<void>; markCleanupPending?(operationId: string): Promise<number>; dueCleanup?(): Promise<readonly { id: string; object_key: string }[]>; markCleaned?(id: string): Promise<void>; markCleanupFailed?(id: string, error: string): Promise<void> };
+export class S3ExternalMediaDeliveryProvider implements ExternalMediaDeliveryProvider {
+  private readonly client: S3Client;
+  constructor(private readonly config: Readonly<{ endpoint?: string; region: string; bucket: string; accessKeyId: string; secretAccessKey: string; forcePathStyle?: boolean; ttlSeconds?: number }>, private readonly store?: DurableStore, client?: S3Client) {
+    if (!config.region || !config.bucket || !config.accessKeyId || !config.secretAccessKey) throw new DomainError("EXTERNAL_MEDIA_CONFIGURATION_MISSING", "S3 staging requires region, bucket, and credentials.");
+    this.client = client ?? new S3Client({ ...(config.endpoint ? { endpoint: config.endpoint } : {}), region: config.region, ...(config.forcePathStyle === undefined ? {} : { forcePathStyle: config.forcePathStyle }), credentials: { accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey } });
+  }
+  async stage(input: Readonly<{ projectId: string; operationId: string; asset: GeneratedAsset; storage: StorageProvider }>): Promise<ExternalMediaReference> {
+    const ttl = this.config.ttlSeconds ?? 3600;
+    const existing = await this.store?.findAvailable(input.operationId, input.asset.id, input.asset.sha256);
+    if (existing) { const expiresAt = new Date(Date.now() + ttl * 1000).toISOString(); return { url: await getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.config.bucket, Key: existing.object_key }), { expiresIn: ttl }), expiresAt, contentType: existing.content_type, size: Number(existing.byte_size) }; }
+    const extension = input.asset.mimeType === "video/mp4" ? "mp4" : input.asset.mimeType === "audio/mpeg" ? "mp3" : "bin";
+    const key = `provider-staging/${input.projectId}/${input.operationId}/${randomUUID()}.${extension}`;
+    const body = await input.storage.read(input.asset.storageKey);
+    if (body.byteLength !== input.asset.byteSize) throw new DomainError("EXTERNAL_MEDIA_SIZE_MISMATCH", "Internal asset size changed before staging.");
+    const expiresAt = new Date(Date.now() + ttl * 1000).toISOString(); const claimed = await this.store?.claim?.({ projectId: input.projectId, operationId: input.operationId, assetId: input.asset.id, backend: "s3", bucket: this.config.bucket, objectKey: key, contentType: input.asset.mimeType, byteSize: input.asset.byteSize, sha256: input.asset.sha256, expiresAt }); const persistedKey = claimed?.object_key ?? key;
+    try { const head = await this.client.send(new HeadObjectCommand({ Bucket: this.config.bucket, Key: persistedKey })); if (head.ContentLength === input.asset.byteSize && head.Metadata?.sha256 === input.asset.sha256) { await this.store?.markAvailable?.(claimed?.id ?? ""); return { url: await getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.config.bucket, Key: persistedKey }), { expiresIn: ttl }), expiresAt, contentType: input.asset.mimeType, size: input.asset.byteSize }; } throw new DomainError("EXTERNAL_MEDIA_METADATA_MISMATCH", "Staged object metadata does not match the expected asset."); } catch (error) { const status = typeof error === "object" && error && "$metadata" in error ? Number((error as { $metadata: { httpStatusCode?: number } }).$metadata.httpStatusCode) : 0; if (error instanceof DomainError || (status && status !== 404)) { await this.store?.markUploadFailed?.(claimed?.id ?? "", error instanceof Error ? error.message : "HEAD reconciliation failed"); throw error; } }
+    try { await this.client.send(new PutObjectCommand({ Bucket: this.config.bucket, Key: persistedKey, Body: body, ContentType: input.asset.mimeType, Metadata: { asset_id: input.asset.id, sha256: input.asset.sha256 } })); await this.store?.markAvailable?.(claimed?.id ?? ""); } catch (error) { await this.store?.markUploadFailed?.(claimed?.id ?? "", error instanceof Error ? error.message : "upload failed"); throw error; }
+    return { url: await getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.config.bucket, Key: persistedKey }), { expiresIn: ttl }), expiresAt, contentType: input.asset.mimeType, size: input.asset.byteSize };
+  }
+  async cleanup(operationId: string): Promise<void> { await this.store?.markCleanupPending?.(operationId); await this.runDueCleanup(); }
+  async runDueCleanup(): Promise<void> { for (const record of await this.store?.dueCleanup?.() ?? []) try { await this.client.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: record.object_key })); await this.store?.markCleaned?.(record.id); } catch (error) { await this.store?.markCleanupFailed?.(record.id, error instanceof Error ? error.message : "S3 cleanup failed"); } }
+}

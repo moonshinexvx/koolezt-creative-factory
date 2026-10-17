@@ -1,0 +1,4 @@
+# NOT ACTIVE IN PRODUCTION.
+# Creative Factory uses the remotely managed `koolezt-creative-factory`
+# Cloudflare Tunnel for creative.printwlove.com and worker.printwlove.com.
+# Do not load Caddy routes for these applications and do not expose port 3100.

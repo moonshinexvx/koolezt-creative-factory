@@ -1,0 +1,2 @@
+ALTER TABLE renders DROP CONSTRAINT renders_status_check;
+ALTER TABLE renders ADD CONSTRAINT renders_status_check CHECK (status IN ('PENDING', 'SUBMITTED', 'PROCESSING', 'SUBMISSION_UNKNOWN', 'SUCCEEDED', 'QA_FAILED', 'FAILED'));

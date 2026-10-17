@@ -1,0 +1,14 @@
+node_modules/
+.pnpm-store/
+.git.codex-backup/
+.git.codex-edit-backup/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+var/
+Ready/
+*.log
+*.tsbuildinfo
+dist.pre-*/

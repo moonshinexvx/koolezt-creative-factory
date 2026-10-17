@@ -1,0 +1,26 @@
+[Unit]
+Description=Koolezt Creative Factory API
+Wants=network-online.target
+After=network-online.target postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=koolezt
+Group=koolezt
+WorkingDirectory=/home/koolezt/apps/koolezt-creative-factory
+Environment=HOME=/home/koolezt
+EnvironmentFile=/home/koolezt/apps/koolezt-creative-factory/.env.production
+ExecStart=/usr/bin/pnpm start:api
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/home/koolezt/data/creative-factory
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

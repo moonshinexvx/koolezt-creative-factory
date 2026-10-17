@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "include": ["packages/**/*.ts", "apps/api/**/*.ts", "apps/worker/**/*.ts", "apps/render-worker/**/*.ts"],
+  "exclude": ["**/*.test.ts"]
+}

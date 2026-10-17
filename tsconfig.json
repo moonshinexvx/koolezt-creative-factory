@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": ["packages/**/*.ts", "apps/api/**/*.ts", "apps/worker/**/*.ts", "apps/render-worker/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts", "drizzle.config.ts", "vitest.config.ts", "vitest.integration.config.ts"]
+}
