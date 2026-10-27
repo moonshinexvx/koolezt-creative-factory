@@ -1107,6 +1107,9 @@ export interface CreativeDnaRepository {
   listApproved(productId?: string, sourceProjectId?: string): Promise<readonly Readonly<{ reference: CreativeReference; revision: CreativeDnaRevision }>[] >;
   saveWinnerReport(record: CreativeWinnerReportRecord): Promise<void>;
   saveMetaLink(link: CreativeMetaLink): Promise<void>;
+  deleteMetaLink(creativeReferenceId: string): Promise<void>;
+  /** Hides the reference from every listing; its rows are kept so it can be restored. */
+  archiveReference(id: string, actor: string, timestamp: string): Promise<void>;
   listMetaLinks(): Promise<readonly CreativeMetaLink[]>;
   listWinnerReports(): Promise<readonly CreativeWinnerReportRecord[]>;
   saveRevision(revision: CreativeDnaRevision): Promise<void>;

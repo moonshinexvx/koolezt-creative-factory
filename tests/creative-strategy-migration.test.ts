@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 describe("creative strategy additive migrations", () => {
   it("adds isolated strategy persistence, immutable revisions, durable provider results, handoffs, and project links", async () => {
     const names = (await readdir(new URL("../db/migrations", import.meta.url))).filter((name) => name.endsWith(".sql")).sort();
-    expect(names.at(-1)).toBe("0024_meta_ad_links.sql");
+    expect(names.at(-1)).toBe("0025_creative_reference_archive.sql");
     const sql = await readFile(new URL("../db/migrations/0016_creative_strategy.sql", import.meta.url), "utf8");
     for (const table of ["creative_strategy_batches", "creative_strategy_concepts", "creative_strategy_concept_revisions", "creative_strategy_provider_operations", "creative_strategy_handoffs"]) expect(sql).toContain(`CREATE TABLE ${table}`);
     expect(sql).toContain("result_payload jsonb");
@@ -86,5 +86,11 @@ describe("creative strategy additive migrations", () => {
     expect(sql).toContain("ad_id text NOT NULL UNIQUE");
     expect(sql).not.toMatch(/token|secret/i);
     expect(sql).not.toMatch(/ALTER TABLE|\bUPDATE\b|INSERT INTO|DROP TABLE|TRUNCATE|DELETE FROM/i);
+  });
+
+  it("archives winners reversibly without deleting rows", async () => {
+    const sql = await readFile(new URL("../db/migrations/0025_creative_reference_archive.sql", import.meta.url), "utf8");
+    expect(sql).toContain("ADD COLUMN archived_at timestamptz");
+    expect(sql).not.toMatch(/DELETE FROM|DROP TABLE|TRUNCATE|NOT NULL/i);
   });
 });

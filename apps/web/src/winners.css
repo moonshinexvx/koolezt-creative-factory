@@ -91,3 +91,5 @@
 .meta-results-header h3{margin:0}
 .meta-results .stat-grid{margin-top:12px}
 .notice{padding:10px 12px;border:1px solid #b9d2ef;border-radius:8px;background:#f3f8fe;color:#1d4f86}
+.winner-actions .danger{border-color:#e3b4ad;color:#8a2c1f;background:#fff}
+.winner-actions .danger:hover:not(:disabled){background:#fdf0ee}

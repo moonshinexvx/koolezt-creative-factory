@@ -36,3 +36,4 @@
 .campaign-project-row .project-open b { font-size: 13px; }
 .campaign-project-row .project-open span { color: #536579; font-size: 11px; }
 .campaign-create-project { width: 100%; text-align: center; }
+.campaign-delete { width: 100%; margin-top: 6px; }

@@ -6,6 +6,7 @@ type Props = Readonly<{
   sidebar: ReactNode;
   products: readonly any[];
   projects: readonly any[];
+  isOwner: boolean;
   onUseInCampaign: (campaign: any, dnaRevisionId: string) => void;
 }>;
 
@@ -98,9 +99,9 @@ function MetaResults({ link, reportUpdatedAt, working, onRefresh }: Readonly<{ l
   </section>;
 }
 
-function WinnerReportView({ entry, campaigns, working, onRegenerate, onAnalyze, onApprove, onSaveDna, onUseInCampaign, onRefreshMeta }: Readonly<{
+function WinnerReportView({ entry, campaigns, working, onRegenerate, onAnalyze, onApprove, onSaveDna, onUseInCampaign, onRefreshMeta, onDelete }: Readonly<{
   entry: any; campaigns: readonly any[]; working: boolean;
-  onRegenerate: () => void; onAnalyze: () => void; onApprove: (revisionId: string) => void; onSaveDna: (text: string) => void; onUseInCampaign: (campaign: any, revisionId: string) => void; onRefreshMeta: () => void;
+  onRegenerate: () => void; onAnalyze: () => void; onApprove: (revisionId: string) => void; onSaveDna: (text: string) => void; onUseInCampaign: (campaign: any, revisionId: string) => void; onRefreshMeta: () => void; onDelete?: () => void;
 }>) {
   const video = useRef<HTMLVideoElement>(null);
   const [dnaText, setDnaText] = useState<string | undefined>();
@@ -126,6 +127,7 @@ function WinnerReportView({ entry, campaigns, working, onRegenerate, onAnalyze, 
       <div className="winner-actions">
         {canAnalyze && <button className="primary" disabled={working} onClick={onAnalyze}>Analyze this video</button>}
         {canRegenerate && <button disabled={working} onClick={onRegenerate}>{report ? "Regenerate report" : "Generate report"}</button>}
+        {onDelete && <button className="danger" disabled={working || status.tone === "working"} title={status.tone === "working" ? "Wait for the analysis to finish" : ""} onClick={onDelete}>Delete winner</button>}
       </div>
     </header>
 
@@ -276,7 +278,7 @@ function MetaImport({ products, working, onImport }: Readonly<{ products: readon
   </section>;
 }
 
-export function WinnerAnalysis({ sidebar, products, projects, onUseInCampaign }: Props) {
+export function WinnerAnalysis({ sidebar, products, projects, isOwner, onUseInCampaign }: Props) {
   const [entries, setEntries] = useState<any[]>([]);
   const [selectedId, setSelectedId] = useState<string | undefined>(() => new URLSearchParams(window.location.search).get("winner") ?? undefined);
   const [productFilter, setProductFilter] = useState("");
@@ -400,7 +402,11 @@ export function WinnerAnalysis({ sidebar, products, projects, onUseInCampaign }:
         onApprove={(revisionId) => void run(() => api(`/api/creative-references/${selected.reference.id}/dna/${revisionId}/approve`, "POST", {}), "Could not approve the DNA revision.")}
         onSaveDna={(text) => void run(async () => api(`/api/creative-references/${selected.reference.id}/dna`, "PUT", JSON.parse(text)), "Could not save the DNA revision.")}
         onUseInCampaign={onUseInCampaign}
-        onRefreshMeta={() => void run(() => api(`/api/creative-references/${selected.reference.id}/meta/refresh`, "POST", {}), "Could not refresh from Meta.")} />
+        onRefreshMeta={() => void run(() => api(`/api/creative-references/${selected.reference.id}/meta/refresh`, "POST", {}), "Could not refresh from Meta.")}
+        {...(isOwner ? { onDelete: () => {
+          if (!window.confirm(`Delete "${selected.reference.displayName}" from Winner Analysis?\n\nIt disappears from this page and from campaign winner lists. Campaigns that already used its DNA keep their copy. An administrator can restore it.`)) return;
+          void run(async () => { await api(`/api/creative-references/${selected.reference.id}`, "DELETE"); setSelectedId(undefined); history.replaceState({}, "", "/winners"); setNotice(`Deleted "${selected.reference.displayName}".`); }, "Could not delete this winner.");
+        } } : {})} />
       : <section className="card"><h2>Winner Analysis</h2><p>Upload a winning ad to see why it worked: the hook, angle, beat-by-beat timeline, voiceover, editing, claims check, and a brief for your next creatives.</p><button className="primary" onClick={() => setShowUpload(true)}>+ Add winner</button></section>}
   </div></section></main>;
 }

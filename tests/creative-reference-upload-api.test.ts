@@ -90,6 +90,15 @@ describe("Creative Reference source-video upload API",()=>{
     await app.close();
   });
 
+  it("lets the owner delete a winner",async()=>{
+    const archive=vi.fn(async()=>undefined);
+    const setup=runtime();(setup.creativeDnaService as Record<string,unknown>).archive=archive;const app=buildServer(setup as never);
+    const response=await app.inject({method:"DELETE",url:"/api/creative-references/reference-1"});
+    expect(response.statusCode).toBe(200);
+    expect(archive).toHaveBeenCalledWith("reference-1",expect.any(String));
+    await app.close();
+  });
+
   it("starts a report-only regeneration when requested",async()=>{
     const setup=runtime();const app=buildServer(setup as never);
     const requestId=crypto.randomUUID();

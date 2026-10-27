@@ -158,6 +158,22 @@ describe("Meta winner import", () => {
     } finally { await setup.dispose(); }
   });
 
+  it("deletes a winner reversibly: hidden everywhere, Meta link cleared so the ad can be imported again", async () => {
+    const setup = await harness();
+    try {
+      const { referenceId } = await setup.service.importAd({ accountId: "act_123456", adId: "555", productId: setup.project.productId, actor: "owner" }) as { referenceId: string };
+      await expect(setup.dnaService.archive(referenceId, "owner")).rejects.toMatchObject({ code: "WINNER_ARCHIVE_IN_PROGRESS" });
+      await setup.dna.updateReference({ ...(await setup.dna.getReference(referenceId)), analysisStatus: "DRAFT" });
+      await setup.dna.saveWinnerReport({ creativeReferenceId: referenceId, status: "FAILED", providerMetadata: {}, createdAt: "t", updatedAt: "t" });
+      await setup.dnaService.archive(referenceId, "owner");
+      expect(await setup.dnaService.list()).toHaveLength(0);
+      expect(await setup.dnaService.listApproved(setup.project.productId)).toHaveLength(0);
+      expect(await setup.dna.listMetaLinks()).toHaveLength(0);
+      expect((await setup.service.importAd({ accountId: "act_123456", adId: "555", productId: setup.project.productId, actor: "owner" })).status).toBe("IMPORTED");
+      await expect(setup.dnaService.archive(referenceId, "owner")).rejects.toMatchObject({ code: "CREATIVE_REFERENCE_NOT_FOUND" });
+    } finally { await setup.dispose(); }
+  });
+
   it("refreshes lifetime results onto the winner and records a failed refresh without losing the last numbers", async () => {
     const setup = await harness();
     try {
