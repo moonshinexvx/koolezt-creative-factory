@@ -85,6 +85,24 @@ describe("Winning Creative DNA", () => {
     } finally { await setup.dispose(); }
   });
 
+  it("saves the DNA draft and records the provider's reason when only the report fails", async () => {
+    class ReportlessProvider extends FakeCreativeProvider {
+      override async submitCreativeDnaAnalysis(input: CreativeDnaAnalysisInput, context: Parameters<FakeCreativeProvider["submitCreativeDnaAnalysis"]>[1]) {
+        const response = await super.submitCreativeDnaAnalysis(input, context);
+        const { winnerReport: _r, ...dna } = JSON.parse(response.outputText!);
+        void _r;
+        return { ...response, outputText: JSON.stringify({ ...dna, winnerReportError: "The Winner Analysis report could not be produced: overloaded" }) };
+      }
+    }
+    const setup = await harness(new ReportlessProvider());
+    try {
+      const reference = await register(setup);
+      expect((await setup.service.processJob((await setup.service.requestAnalysis(reference.id, crypto.randomUUID())).id)).status).toBe("COMPLETED");
+      expect((await setup.dna.getReference(reference.id)).analysisStatus).toBe("DRAFT");
+      expect((await setup.service.listWinnerReports())[0]).toMatchObject({ status: "FAILED", failureMessage: "The Winner Analysis report could not be produced: overloaded" });
+    } finally { await setup.dispose(); }
+  });
+
   it("refuses a report-only run before the creative has been analyzed", async () => {
     const setup = await harness();
     try {

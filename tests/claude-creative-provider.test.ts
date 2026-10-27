@@ -70,15 +70,47 @@ describe("Claude creative provider", () => {
     await expect(dropped.rewriteNarration({ script: "x" } as never, context)).rejects.toMatchObject({ code: "CLAUDE_NARRATION_REWRITE_SUBMISSION_UNKNOWN" });
   });
 
-  it("sends Creative DNA frames as base64 images and keeps frame bytes out of the text payload", async () => {
-    const dna = { openingPattern: "o", openingProductVisible: true, approximateProductRevealMs: null, visualHookMechanism: "v", productProminence: "p", personalizationVisibility: "p", repeatedExamplePattern: "r", approximateExampleCount: 2, pacingPattern: "p", beatStructure: "b", overlayTextPattern: "o", offerVisibilityPattern: "o", ctaPattern: "c", proofPattern: "p", visualFormat: "v", lifestyleVsProductBalance: "l", soundOffComprehension: "s", directResponsePattern: "d", closingPattern: "c", preserveTraits: [], safeToVaryTraits: [], avoidTraits: [], sourceEvidence: [{ kind: "VISUAL_FRAME", observation: "o", timestampMs: 0, endTimestampMs: null, frameSha256: "abc" }], winnerReport: { verdict: { summary: "s", reasons: [{ title: "t", explanation: "e", confidence: "HIGH", evidence: [{ source: "FRAME", detail: "d", timestampMs: 0, endTimestampMs: null }] }] }, hook: { visualHook: "v", textHook: "", spokenHook: "", hookType: "PRODUCT_REVEAL", productFirstVisibleMs: 0, whyItStops: "w", strength: "STRONG" }, angle: { coreAngle: "a", buyerMotivation: "b", desireOrProblem: "d", emotionalTriggers: [], awarenessLevel: "PRODUCT_AWARE", promise: "p", proof: "p", offer: "", objectionsHandled: [], cta: "c", ctaTimestampMs: null }, timeline: [{ startMs: 0, endMs: 1000, beat: "HOOK", visual: "v", voiceLine: "", onScreenText: "", purpose: "p" }], voice: { deliveryStyle: "d", scriptStructure: "s", keyPhrases: [] }, editing: { format: "f", captionStyle: "c", productProminence: "p", soundOffComprehension: "s", pacingAssessment: "p" }, claimsCheck: [], performanceRead: "None supplied.", nextCreativeBrief: { keep: [], test: [{ idea: "i", hypothesis: "h", type: "HOOK" }], avoid: [] } } };
-    const { client, requests } = clientReturning(message(dna, { id: "msg_dna" }));
-    const provider = new ClaudeCreativeProvider({ apiKey: "test", model: "claude-opus-5-5" }, client);
+  it("analyzes DNA with structured output and the report as parallel plain JSON, sending frames as images", async () => {
+    const dna = { openingPattern: "o", openingProductVisible: true, approximateProductRevealMs: null, visualHookMechanism: "v", productProminence: "p", personalizationVisibility: "p", repeatedExamplePattern: "r", approximateExampleCount: 2, pacingPattern: "p", beatStructure: "b", overlayTextPattern: "o", offerVisibilityPattern: "o", ctaPattern: "c", proofPattern: "p", visualFormat: "v", lifestyleVsProductBalance: "l", soundOffComprehension: "s", directResponsePattern: "d", closingPattern: "c", preserveTraits: [], safeToVaryTraits: [], avoidTraits: [], sourceEvidence: [{ kind: "VISUAL_FRAME", observation: "o", timestampMs: 0, endTimestampMs: null, frameSha256: "abc" }] };
+    const winnerReport = { verdict: { summary: "s", reasons: [{ title: "t", explanation: "e", confidence: "HIGH", evidence: [{ source: "FRAME", detail: "d", timestampMs: 0, endTimestampMs: null }] }] }, hook: { visualHook: "v", textHook: "", spokenHook: "", hookType: "PRODUCT_REVEAL", productFirstVisibleMs: 0, whyItStops: "w", strength: "STRONG" }, angle: { coreAngle: "a", buyerMotivation: "b", desireOrProblem: "d", emotionalTriggers: [], awarenessLevel: "PRODUCT_AWARE", promise: "p", proof: "p", offer: "", objectionsHandled: [], cta: "c", ctaTimestampMs: null }, timeline: [{ startMs: 0, endMs: 1000, beat: "HOOK", visual: "v", voiceLine: "", onScreenText: "", purpose: "p" }], voice: { deliveryStyle: "d", scriptStructure: "s", keyPhrases: [] }, editing: { format: "f", captionStyle: "c", productProminence: "p", soundOffComprehension: "s", pacingAssessment: "p" }, claimsCheck: [], performanceRead: "None supplied.", nextCreativeBrief: { keep: [], test: [{ idea: "i", hypothesis: "h", type: "HOOK" }], avoid: [] } };
+    const requests: Record<string, unknown>[] = [];
+    const stream = vi.fn((request: Record<string, unknown>) => {
+      requests.push(request);
+      const structured = Boolean((request.output_config as { format?: unknown }).format);
+      return { finalMessage: async () => structured ? message(dna, { id: "msg_dna" }) : message("```json\n" + JSON.stringify(winnerReport) + "\n```", { id: "msg_report" }) };
+    });
+    const provider = new ClaudeCreativeProvider({ apiKey: "test", model: "claude-opus-5-5" }, { beta: { messages: { stream } } } as never);
     const dnaInput = { frames: [{ timestampMs: 0, mimeType: "image/jpeg", sha256: "abc", bytesBase64: "QkFTRTY0RlJBTUU=" }] } as unknown as CreativeDnaAnalysisInput;
-    expect(await provider.submitCreativeDnaAnalysis(dnaInput, context)).toMatchObject({ status: "completed", responseId: "msg_dna" });
-    const content = (requests[0]!.messages as { content: { type: string; text?: string; source?: unknown }[] }[])[0]!.content;
-    expect(content[0]).toEqual({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "QkFTRTY0RlJBTUU=" } });
-    expect(content.at(-1)!.text).not.toContain("QkFTRTY0RlJBTUU=");
+    const response = await provider.submitCreativeDnaAnalysis(dnaInput, context);
+    expect(response).toMatchObject({ status: "completed", responseId: "msg_dna", usage: { inputTokens: 24, outputTokens: 68 } });
+    expect(JSON.parse(response.outputText!)).toEqual({ ...dna, winnerReport });
+    expect(await provider.retrieveCreativeDnaAnalysis("msg_dna")).toEqual(response);
+    expect(stream).toHaveBeenCalledTimes(2);
+    const reportRequest = requests.find((request) => !(request.output_config as { format?: unknown }).format)!;
+    expect(String(reportRequest.system)).toContain("Respond with exactly one JSON object");
+    expect(String(reportRequest.system)).toContain("nextCreativeBrief");
+    for (const request of requests) {
+      const content = (request.messages as { content: { type: string; text?: string }[] }[])[0]!.content;
+      expect(content[0]).toEqual({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "QkFTRTY0RlJBTUU=" } });
+      expect(content.at(-1)!.text).not.toContain("QkFTRTY0RlJBTUU=");
+    }
+  });
+
+  it("keeps the DNA result when only the report call fails, and records why", async () => {
+    const dna = { openingPattern: "o", openingProductVisible: true, approximateProductRevealMs: null, visualHookMechanism: "v", productProminence: "p", personalizationVisibility: "p", repeatedExamplePattern: "r", approximateExampleCount: 2, pacingPattern: "p", beatStructure: "b", overlayTextPattern: "o", offerVisibilityPattern: "o", ctaPattern: "c", proofPattern: "p", visualFormat: "v", lifestyleVsProductBalance: "l", soundOffComprehension: "s", directResponsePattern: "d", closingPattern: "c", preserveTraits: [], safeToVaryTraits: [], avoidTraits: [], sourceEvidence: [{ kind: "VISUAL_FRAME", observation: "o", timestampMs: 0, endTimestampMs: null, frameSha256: "abc" }] };
+    const stream = vi.fn((request: Record<string, unknown>) => ({
+      finalMessage: async () => {
+        if ((request.output_config as { format?: unknown }).format) return message(dna, { id: "msg_dna" });
+        throw Object.assign(new Error("overloaded"), { status: 529 });
+      }
+    }));
+    const provider = new ClaudeCreativeProvider({ apiKey: "test", model: "claude-opus-5-5" }, { beta: { messages: { stream } } } as never);
+    const response = await provider.submitCreativeDnaAnalysis({ frames: [] } as unknown as CreativeDnaAnalysisInput, context);
+    const output = JSON.parse(response.outputText!);
+    expect(response.status).toBe("completed");
+    expect(output.openingPattern).toBe("o");
+    expect(output.winnerReport).toBeUndefined();
+    expect(output.winnerReportError).toContain("overloaded");
   });
 
   it("generates four variant packages and a narration rewrite", async () => {

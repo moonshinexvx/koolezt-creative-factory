@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { DomainError } from "@koolezt/domain";
 import type { ConceptProviderResponse, CreativeConceptProviderDraft, CreativeDnaAnalysisInput, CreativeInputSnapshot, CreativeProvider, ExecutionFeasibilityPlan, NarrationRewriteInput, ProviderOperationContext, ProviderSubmission, StrategyGenerationInput, StrategyProviderResponse, VariantCreativePackageDraft, VariantPackageGenerationInput } from "@koolezt/domain";
 import { OPENAI_CREATIVE_INSTRUCTIONS as CREATIVE_INSTRUCTIONS, OPENAI_CREATIVE_PROMPT_VERSION as CREATIVE_PROMPT_VERSION, OPENAI_NARRATION_REWRITE_INSTRUCTIONS as NARRATION_REWRITE_INSTRUCTIONS } from "./openai-creative-prompt.js";
-import { backgroundConceptInstructions, conceptInstructions, DNA_ANALYSIS_INSTRUCTIONS, dnaAnalysisSchema, WINNER_REPORT_INSTRUCTIONS, legacyConceptSchema, narrationRewriteSchema, referenceCatalog, strategyExecutionSchemaFor, strategyInstructions, strategyProviderInput, strategySchemaFor, VARIANT_PACKAGE_INSTRUCTIONS, variantPackageSchema } from "./creative-contract.js";
+import { backgroundConceptInstructions, conceptInstructions, DNA_ANALYSIS_INSTRUCTIONS, dnaSchema, WINNER_REPORT_SYSTEM, legacyConceptSchema, narrationRewriteSchema, referenceCatalog, strategyExecutionSchemaFor, strategyInstructions, strategyProviderInput, strategySchemaFor, VARIANT_PACKAGE_INSTRUCTIONS, variantPackageSchema } from "./creative-contract.js";
 
 export type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
 type JsonSchema = Readonly<Record<string, unknown>>;
@@ -68,6 +68,21 @@ export function schemaViolation(value: unknown, schema: JsonSchema, path = "$"):
   return undefined;
 }
 
+/** Reads a JSON object from model text, tolerating code fences or stray prose around it. */
+export function parseLooseJson(text: string): unknown {
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  try { return JSON.parse(trimmed); } catch { /* fall through to the outermost object */ }
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("No JSON object found.");
+  return JSON.parse(trimmed.slice(start, end + 1));
+}
+
+function providerMessage(error: unknown): string {
+  const message = typeof error === "object" && error && "message" in error ? String((error as { message: unknown }).message) : "";
+  return message ? ` ${message.slice(0, 300)}` : "";
+}
+
 function httpStatus(error: unknown): number {
   return typeof error === "object" && error && "status" in error ? Number((error as { status: unknown }).status) || 0 : 0;
 }
@@ -93,7 +108,7 @@ export class ClaudeCreativeProvider implements CreativeProvider {
    * One streamed Messages call with a structured-output schema. Throws DomainError for refusals,
    * truncation, and schema violations; transport errors propagate for the caller to classify.
    */
-  private async call(request: Readonly<{ system: string; payload: unknown; images?: readonly ImageBlock[]; schema: JsonSchema; effort: ClaudeEffort; timeoutMs: number; invalidCode: string }>): Promise<ClaudeCallResult> {
+  private async call(request: Readonly<{ system: string; payload: unknown; images?: readonly ImageBlock[]; schema?: JsonSchema; effort: ClaudeEffort; timeoutMs: number; invalidCode: string }>): Promise<ClaudeCallResult> {
     const stream = this.client.beta.messages.stream({
       model: this.config.model,
       max_tokens: 64_000,
@@ -101,18 +116,18 @@ export class ClaudeCreativeProvider implements CreativeProvider {
       fallbacks: "default",
       system: request.system,
       messages: [{ role: "user", content: [...(request.images ?? []), { type: "text", text: JSON.stringify(request.payload) }] }],
-      output_config: { effort: request.effort, format: { type: "json_schema", schema: toClaudeSchema(request.schema) } }
+      output_config: { effort: request.effort, ...(request.schema ? { format: { type: "json_schema" as const, schema: toClaudeSchema(request.schema) } } : {}) }
     }, { timeout: request.timeoutMs });
     const message = await stream.finalMessage();
     if (message.stop_reason === "refusal") throw new DomainError("CLAUDE_REFUSED", `Claude declined this request${message.stop_details?.category ? ` (${message.stop_details.category})` : ""}; it will not be retried automatically.`);
     if (message.stop_reason === "max_tokens") throw new DomainError(request.invalidCode, "Claude reached its output limit before completing the structured response.");
     const outputText = message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
     let parsed: unknown;
-    try { parsed = JSON.parse(outputText); } catch { throw new DomainError(request.invalidCode, "Claude returned malformed structured data."); }
-    const violation = schemaViolation(parsed, request.schema);
+    try { parsed = request.schema ? JSON.parse(outputText) : parseLooseJson(outputText); } catch { throw new DomainError(request.invalidCode, "Claude returned malformed structured data."); }
+    const violation = request.schema ? schemaViolation(parsed, request.schema) : undefined;
     if (violation) throw new DomainError(request.invalidCode, `Claude returned structured data outside the allowed bounds: ${violation}.`);
     const usage = { inputTokens: message.usage.input_tokens + (message.usage.cache_read_input_tokens ?? 0) + (message.usage.cache_creation_input_tokens ?? 0), outputTokens: message.usage.output_tokens };
-    return { id: message.id, model: message.model, outputText, usage: { ...usage, totalTokens: usage.inputTokens + usage.outputTokens } };
+    return { id: message.id, model: message.model, outputText: request.schema ? outputText : JSON.stringify(parsed), usage: { ...usage, totalTokens: usage.inputTokens + usage.outputTokens } };
   }
 
   private submission(result: ClaudeCallResult, context: ProviderOperationContext, promptVersion: string): ProviderSubmission {
@@ -122,7 +137,7 @@ export class ClaudeCreativeProvider implements CreativeProvider {
   private interactiveFailure(error: unknown, invalidCode: string, unknownCode: string, label: string): never {
     if (error instanceof DomainError) throw error;
     const status = httpStatus(error);
-    if (status === 400) throw new DomainError(invalidCode, `Claude rejected the ${label} request.`);
+    if (status === 400) throw new DomainError(invalidCode, `Claude rejected the ${label} request.${providerMessage(error)}`);
     if (status === 401 || status === 403) throw new DomainError("CLAUDE_AUTHENTICATION_FAILED", "Claude authentication was rejected.");
     if (status === 429) throw new DomainError("CLAUDE_RATE_LIMITED", "Claude rate limit reached; retry later.");
     if (status >= 500) throw new DomainError("CLAUDE_UNAVAILABLE", "Claude is temporarily unavailable.");
@@ -146,7 +161,7 @@ export class ClaudeCreativeProvider implements CreativeProvider {
         throw error;
       }
       const status = httpStatus(error);
-      if (status === 400) throw new DomainError(request.invalidCode, `Claude rejected the bounded ${label} request.`);
+      if (status === 400) throw new DomainError(request.invalidCode, `Claude rejected the bounded ${label} request.${providerMessage(error)}`);
       if (status === 401 || status === 403) throw new DomainError("CLAUDE_AUTHENTICATION_FAILED", "Claude authentication was rejected.");
       if (status === 429) throw new DomainError("CLAUDE_RATE_LIMITED", "Claude rate limit reached; retry only by explicit operator action.");
       throw new DomainError(unknownCode, `Claude ${label} outcome is unknown; do not retry automatically.`);
@@ -219,12 +234,20 @@ export class ClaudeCreativeProvider implements CreativeProvider {
       ...(input.currentProduct ? { currentProduct: { ...input.currentProduct, authority: "CURRENT_PRODUCT_TRUTH_READ_ONLY" } } : {})
     };
     const images = input.frames.map((frame): ImageBlock => ({ type: "image", source: { type: "base64", media_type: frame.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: frame.bytesBase64 } }));
-    return this.background({
-      system: DNA_ANALYSIS_INSTRUCTIONS + WINNER_REPORT_INSTRUCTIONS,
-      payload: { operationKey: context.operationKey, reference: safeInput },
-      images, schema: dnaAnalysisSchema,
+    const payload = { operationKey: context.operationKey, reference: safeInput };
+    // The report runs alongside the DNA call; its failure is reported on the report, never on the DNA.
+    const report = this.call({ system: WINNER_REPORT_SYSTEM(), payload, images, effort: this.backgroundEffort, timeoutMs: this.backgroundTimeoutMs, invalidCode: "CLAUDE_WINNER_REPORT_INVALID" })
+      .then((result) => ({ winnerReport: JSON.parse(result.outputText) as unknown, usage: result.usage }))
+      .catch((error: unknown) => ({ winnerReportError: `The Winner Analysis report could not be produced:${providerMessage(error) || " unknown error"}`.slice(0, 500) }));
+    const dna = await this.background({
+      system: DNA_ANALYSIS_INSTRUCTIONS, payload, images, schema: dnaSchema,
       effort: this.backgroundEffort, timeoutMs: this.backgroundTimeoutMs, invalidCode: "CLAUDE_DNA_INVALID"
     }, "CLAUDE_DNA_SUBMISSION_UNKNOWN", "Creative DNA analysis");
+    const extra = await report;
+    if (dna.status !== "completed" || !dna.outputText) return dna;
+    const merged: StrategyProviderResponse = { ...dna, outputText: JSON.stringify({ ...(JSON.parse(dna.outputText) as Record<string, unknown>), ...("winnerReport" in extra ? { winnerReport: extra.winnerReport } : { winnerReportError: extra.winnerReportError }) }), ...("usage" in extra && dna.usage ? { usage: { inputTokens: (dna.usage.inputTokens ?? 0) + extra.usage.inputTokens, outputTokens: (dna.usage.outputTokens ?? 0) + extra.usage.outputTokens, totalTokens: (dna.usage.totalTokens ?? 0) + extra.usage.totalTokens } } : {}) };
+    this.completed.set(merged.responseId, merged);
+    return merged;
   }
 
   async retrieveCreativeDnaAnalysis(responseId: string): Promise<StrategyProviderResponse> {
