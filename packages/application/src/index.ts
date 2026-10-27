@@ -1234,9 +1234,9 @@ export class CreativeFactoryService {
       ...(project.creativeBrief?.productDetails ? { productDetails: project.creativeBrief.productDetails } : {}), cta: concept.cta
     }, { operationKey, projectId: project.id, targetId: `narration-revision-${revisionNumber}` });
     const rewritten = String(result.script ?? "").trim();
-    if (!rewritten) throw new DomainError("OPENAI_NARRATION_REWRITE_INVALID", "Narration rewrite was empty.");
+    if (!rewritten) throw new DomainError("PROVIDER_NARRATION_REWRITE_INVALID", "Narration rewrite was empty.");
     const completedAt = this.now().toISOString();
-    const revision = this.createNarrationRevision(project, rewritten, "OPENAI_REWRITE", completedAt, parent.id, {
+    const revision = this.createNarrationRevision(project, rewritten, "AI_REWRITE", completedAt, parent.id, {
       provider: result.submission.provider, providerModel: result.submission.model, providerRequestId: result.submission.requestId,
       providerMetadata: { operationKey, ...result.submission.metadata }
     });
@@ -1491,7 +1491,7 @@ export class CreativeFactoryService {
       try{response=await this.creativeProvider.retrieveConceptExecution(operation.providerTaskId);}
       catch(error){
         const timestamp=this.now().toISOString();
-        if(error instanceof DomainError&&error.code==="OPENAI_CONCEPT_RESULT_UNAVAILABLE"){
+        if(error instanceof DomainError&&error.code==="PROVIDER_CONCEPT_RESULT_UNAVAILABLE"){
           operation={...operation,state:"RESULT_UNAVAILABLE",completedAt:timestamp,rejectionCode:error.code,safeErrorMessage:error.message};
           await this.repository.saveConceptProviderOperation(operation);await resetProject("CONCEPT_RESULT_UNAVAILABLE",error.message);throw error;
         }
@@ -1503,7 +1503,7 @@ export class CreativeFactoryService {
       const ageMs=Date.now()-Date.parse(operation.latestPollAt??operation.submittedAt??project.updatedAt);
       if(Number.isFinite(ageMs)&&ageMs<120_000)throw new ConceptPollPending(new Date(Date.now()+5_000).toISOString(),"Creative Concept submission is already being claimed.");
       const timestamp=this.now().toISOString();
-      operation={...operation,state:"SUBMISSION_UNKNOWN",completedAt:timestamp,rejectionCode:"OPENAI_CONCEPT_SUBMISSION_UNKNOWN",safeErrorMessage:"Worker stopped after paid submission began but before a Response ID was persisted."};
+      operation={...operation,state:"SUBMISSION_UNKNOWN",completedAt:timestamp,rejectionCode:"PROVIDER_CONCEPT_SUBMISSION_UNKNOWN",safeErrorMessage:"Worker stopped after paid submission began but before a Response ID was persisted."};
       await this.repository.saveConceptProviderOperation(operation);await resetProject("CONCEPT_SUBMISSION_UNKNOWN",operation.safeErrorMessage!);
       throw new DomainError("CONCEPT_SUBMISSION_UNKNOWN",operation.safeErrorMessage!);
     }else{
@@ -1533,12 +1533,12 @@ export class CreativeFactoryService {
         await this.repository.saveConceptProviderOperation(operation);await resetProject("CONCEPT_PROVIDER_FAILED",message);throw new DomainError("CONCEPT_PROVIDER_TERMINAL_FAILURE",message);
       }
       if(!response.outputText){
-        operation={...operation,state:"FAILED",completedAt:polledAt,rejectionCode:"OPENAI_CONCEPT_INVALID",safeErrorMessage:"Completed Creative Concept response contained no structured output."};
-        await this.repository.saveConceptProviderOperation(operation);await resetProject("CONCEPT_PROVIDER_FAILED",operation.safeErrorMessage!);throw new DomainError("OPENAI_CONCEPT_INVALID",operation.safeErrorMessage!);
+        operation={...operation,state:"FAILED",completedAt:polledAt,rejectionCode:"PROVIDER_CONCEPT_INVALID",safeErrorMessage:"Completed Creative Concept response contained no structured output."};
+        await this.repository.saveConceptProviderOperation(operation);await resetProject("CONCEPT_PROVIDER_FAILED",operation.safeErrorMessage!);throw new DomainError("PROVIDER_CONCEPT_INVALID",operation.safeErrorMessage!);
       }
       try{draft=JSON.parse(response.outputText) as typeof draft;}catch{
-        operation={...operation,state:"FAILED",completedAt:polledAt,rejectionCode:"OPENAI_CONCEPT_INVALID",safeErrorMessage:"Completed Creative Concept response contained malformed structured output."};
-        await this.repository.saveConceptProviderOperation(operation);await resetProject("CONCEPT_PROVIDER_FAILED",operation.safeErrorMessage!);throw new DomainError("OPENAI_CONCEPT_INVALID",operation.safeErrorMessage!);
+        operation={...operation,state:"FAILED",completedAt:polledAt,rejectionCode:"PROVIDER_CONCEPT_INVALID",safeErrorMessage:"Completed Creative Concept response contained malformed structured output."};
+        await this.repository.saveConceptProviderOperation(operation);await resetProject("CONCEPT_PROVIDER_FAILED",operation.safeErrorMessage!);throw new DomainError("PROVIDER_CONCEPT_INVALID",operation.safeErrorMessage!);
       }
       operation={...operation,resultSha256:conceptProviderResultSha256(draft!),safeResult:boundedConceptProviderResult(draft!)};
       await this.repository.saveConceptProviderOperation(operation);

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.3.0",
     "@koolezt/domain": "workspace:*",
     "openai": "^7.8.0"
   }

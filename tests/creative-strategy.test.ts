@@ -269,14 +269,14 @@ describe("recoverable background Creative Concept lifecycle", () => {
 
   it("marks a pre-ID ambiguity terminal and never automatically submits again", async () => {
     const base = new FakeCreativeProvider();
-    const submitConceptExecution = vi.fn(async () => { throw new DomainError("OPENAI_CONCEPT_SUBMISSION_UNKNOWN", "Submission outcome is unknown."); });
+    const submitConceptExecution = vi.fn(async () => { throw new DomainError("PROVIDER_CONCEPT_SUBMISSION_UNKNOWN", "Submission outcome is unknown."); });
     const provider: CreativeProvider = { generateConcept: base.generateConcept.bind(base), submitStrategyConcepts: base.submitStrategyConcepts.bind(base), retrieveStrategyConcepts: base.retrieveStrategyConcepts.bind(base), submitConceptExecution, retrieveConceptExecution: vi.fn() };
     const setup = await harness(provider);
     try {
       const project = await strategyHandoff(setup);
       await setup.service.generateConcept(project.id, "editor");
       const job = (await setup.repository.listJobs(project.id)).find((item) => item.type === "GENERATE_CONCEPT")!;
-      await expect(setup.service.processJob(job.id)).rejects.toMatchObject({ code: "OPENAI_CONCEPT_SUBMISSION_UNKNOWN" });
+      await expect(setup.service.processJob(job.id)).rejects.toMatchObject({ code: "PROVIDER_CONCEPT_SUBMISSION_UNKNOWN" });
       expect(await setup.repository.getConceptProviderOperation(job.dedupeKey)).toMatchObject({ state: "SUBMISSION_UNKNOWN" });
       expect((await setup.repository.getProject(project.id)).state).toBe("DRAFT");
       expect((await setup.service.processJob(job.id)).status).toBe("FAILED");
@@ -287,7 +287,7 @@ describe("recoverable background Creative Concept lifecycle", () => {
   it("marks a known unavailable result distinctly and retrieves without another create", async () => {
     const base = new FakeCreativeProvider();
     const submitConceptExecution = vi.fn(async () => ({ responseId: "resp_expired", status: "queued" as const, provider: "fake-openai", model: "fake-background" }));
-    const retrieveConceptExecution = vi.fn(async () => { throw new DomainError("OPENAI_CONCEPT_RESULT_UNAVAILABLE", "Known result is no longer retrievable."); });
+    const retrieveConceptExecution = vi.fn(async () => { throw new DomainError("PROVIDER_CONCEPT_RESULT_UNAVAILABLE", "Known result is no longer retrievable."); });
     const provider: CreativeProvider = { generateConcept: base.generateConcept.bind(base), submitStrategyConcepts: base.submitStrategyConcepts.bind(base), retrieveStrategyConcepts: base.retrieveStrategyConcepts.bind(base), submitConceptExecution, retrieveConceptExecution };
     const setup = await harness(provider);
     try {
@@ -295,7 +295,7 @@ describe("recoverable background Creative Concept lifecycle", () => {
       await setup.service.generateConcept(project.id, "editor");
       const job = (await setup.repository.listJobs(project.id)).find((item) => item.type === "GENERATE_CONCEPT")!;
       expect((await setup.service.processJob(job.id)).status).toBe("PENDING");
-      await expect(setup.service.processJob(job.id)).rejects.toMatchObject({ code: "OPENAI_CONCEPT_RESULT_UNAVAILABLE" });
+      await expect(setup.service.processJob(job.id)).rejects.toMatchObject({ code: "PROVIDER_CONCEPT_RESULT_UNAVAILABLE" });
       expect(await setup.repository.getConceptProviderOperation(job.dedupeKey)).toMatchObject({ state: "RESULT_UNAVAILABLE", providerTaskId: "resp_expired" });
       expect(submitConceptExecution).toHaveBeenCalledTimes(1);
       expect(retrieveConceptExecution).toHaveBeenCalledTimes(1);
@@ -423,7 +423,7 @@ describe("recoverable background Creative Concept lifecycle", () => {
       const project=await strategyHandoff(setup);
       await setup.service.generateConcept(project.id,"editor");
       const job=(await setup.repository.listJobs(project.id)).find((item)=>item.type==="GENERATE_CONCEPT")!;
-      await expect(setup.service.processJob(job.id)).rejects.toMatchObject({code:"OPENAI_CONCEPT_INVALID"});
+      await expect(setup.service.processJob(job.id)).rejects.toMatchObject({code:"PROVIDER_CONCEPT_INVALID"});
       expect(await setup.repository.getConceptProviderOperation(job.dedupeKey)).toMatchObject({state:"FAILED",providerTaskId:"resp_malformed"});
       expect(submitConceptExecution).toHaveBeenCalledTimes(1);
     }finally{await setup.dispose();}
@@ -637,7 +637,7 @@ describe("durable background Strategy provider lifecycle", () => {
     const temp = await pendingBatch(seed);
     const completed = await seed.submitStrategyConcepts(temp.batch.inputSnapshot, { operationKey: "seed-unavailable", projectId: temp.project.id, targetId: temp.batch.id });
     await temp.setup.dispose();
-    const scripted = await queuedProvider([new DomainError("OPENAI_STRATEGY_RESULT_UNAVAILABLE", "expired")]);
+    const scripted = await queuedProvider([new DomainError("PROVIDER_STRATEGY_RESULT_UNAVAILABLE", "expired")]);
     void completed;
     const after = await pendingBatch(scripted.provider);
     try {

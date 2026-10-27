@@ -27,7 +27,7 @@ import type {
   StorageProvider,
   VideoOutputIngestor
 } from "@koolezt/domain";
-export { FfmpegCreativeDnaPreprocessor, creativeDnaSampleTimestamps, MAX_CREATIVE_DNA_FRAMES } from "./creative-dna-preprocessor.js";
+export { CREATIVE_DNA_SCENE_THRESHOLD, FfmpegCreativeDnaPreprocessor, creativeDnaPacing, creativeDnaSampleTimestamps, MAX_CREATIVE_DNA_FRAMES, parseSceneCuts } from "./creative-dna-preprocessor.js";
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");

@@ -46,7 +46,7 @@ describe("voice script revisions and timing fit", () => {
 
     project = await setup.service.rewriteNarrationToFit(project.id, script, "editor");
     expect(project.narrationRevisions).toHaveLength(2);
-    expect(project.narrationRevisions?.at(-1)).toMatchObject({ source: "OPENAI_REWRITE", script, parentRevisionId: project.narrationRevisions?.[0]?.id });
+    expect(project.narrationRevisions?.at(-1)).toMatchObject({ source: "AI_REWRITE", script, parentRevisionId: project.narrationRevisions?.[0]?.id });
     expect(setup.creativeProvider.calls).toHaveLength(initialCreativeCalls + 1);
     expect(setup.voiceProvider.submissions).toHaveLength(initialVoiceSubmissions);
 

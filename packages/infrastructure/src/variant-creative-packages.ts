@@ -3,7 +3,7 @@ import type { Pool, QueryResultRow } from "pg";
 import { DomainError } from "@koolezt/domain";
 import type { VariantPackageSlot } from "@koolezt/domain";
 
-export type VariantPackageSource = "MANUAL" | "OPENAI";
+export type VariantPackageSource = "MANUAL" | "AI_PROVIDER" | "OPENAI";
 export type VariantPackageVoiceStatus = "PENDING" | "REVIEW" | "ACCEPTED" | "REJECTED" | "STALE" | "FAILED";
 export type VariantPackageRevision = Readonly<{ id:string; packageId:string; revision:number; angleName:string; hook:string; narrationText:string; cta:string; secondaryOverlay?:string; source:VariantPackageSource; providerMetadata:Readonly<Record<string,unknown>>; createdBy:string; createdAt:string }>;
 export type VariantPackageVoice = Readonly<{ id:string; packageRevisionId:string; narrationSha256:string; provider:string; model:string; voicePreset:string; audioAssetId?:string; checksum?:string; durationMs?:number; status:VariantPackageVoiceStatus; providerTaskId?:string; providerMetadata:Readonly<Record<string,unknown>>; failureMessage?:string; createdBy:string; createdAt:string; acceptedAt?:string; updatedAt:string }>;

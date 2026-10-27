@@ -89,7 +89,7 @@ describe("Winning Creative DNA", () => {
 
   it("uses bounded hook-heavy frame sampling and always includes a final frame", () => {
     const timestamps = creativeDnaSampleTimestamps(30_000);
-    expect(timestamps.length).toBeLessThanOrEqual(12);
+    expect(timestamps.length).toBeLessThanOrEqual(30);
     expect(timestamps.filter((value) => value <= 3_000).length).toBeGreaterThanOrEqual(7);
     expect(timestamps[0]).toBe(0);
     expect(timestamps.at(-1)).toBe(29_900);
@@ -108,7 +108,9 @@ describe("Winning Creative DNA", () => {
       const result = await new FfmpegCreativeDnaPreprocessor(storage, ffmpeg, ffprobe).preprocess(asset);
       expect(result.mediaMetadata).toMatchObject({ width: 1080, height: 1920, hasAudio: true, mimeType: "video/mp4" });
       expect(result.mediaMetadata.durationMs).toBeGreaterThan(14_000);
-      expect(result.frames.length).toBeLessThanOrEqual(12);
+      expect(result.frames.length).toBeLessThanOrEqual(30);
+      expect(result.pacing).toMatchObject({ shotCount: (result.pacing?.sceneCutsMs.length ?? 0) + 1, detectionThreshold: 0.3 });
+      expect(result.audioTranscript).toEqual({ status: "DISABLED" });
       expect(result.frames.filter((frame) => frame.timestampMs <= 3_000).length).toBeGreaterThanOrEqual(7);
       expect(result.frames.every((frame) => frame.sha256.length === 64 && frame.bytesBase64.length > 0)).toBe(true);
     } finally { await rm(root, { recursive: true, force: true }); }
@@ -125,7 +127,7 @@ describe("Winning Creative DNA", () => {
       expect(provider.calls).toHaveLength(1);
       const record = (await setup.service.list())[0]!;
       expect(record.reference.analysisStatus).toBe("DRAFT");
-      expect(record.revisions[0]).toMatchObject({ revision: 1, status: "DRAFT", source: "OPENAI", openingProductVisible: true });
+      expect(record.revisions[0]).toMatchObject({ revision: 1, status: "DRAFT", source: "AI_PROVIDER", openingProductVisible: true });
       expect(record.revisions[0]!.sourceEvidence).toEqual(expect.arrayContaining([
         expect.objectContaining({ timestampMs: 0, frameSha256: "first-frame" }),
         expect.objectContaining({ timestampMs: 14_900, frameSha256: "last-frame" })
@@ -202,7 +204,7 @@ describe("Winning Creative DNA", () => {
     const provider: CreativeProvider = {
       generateConcept: base.generateConcept.bind(base),
       submitCreativeDnaAnalysis: async () => { creates += 1; return { responseId: "resp-lost", status: "queued", provider: "fake-openai", model: "fake-dna" }; },
-      retrieveCreativeDnaAnalysis: async () => { throw new DomainError("OPENAI_DNA_RESULT_UNAVAILABLE", "The known Creative DNA response is no longer retrievable; it will not be resubmitted."); }
+      retrieveCreativeDnaAnalysis: async () => { throw new DomainError("PROVIDER_DNA_RESULT_UNAVAILABLE", "The known Creative DNA response is no longer retrievable; it will not be resubmitted."); }
     };
     const setup = await harness(provider);
     try {

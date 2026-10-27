@@ -24,9 +24,12 @@ import type {
   VariantPackageGenerationInput
 } from "@koolezt/domain";
 import { readFile } from "node:fs/promises";
+export { ClaudeCreativeProvider, schemaViolation, toClaudeSchema } from "./claude-creative.js";
+export type { ClaudeEffort } from "./claude-creative.js";
 export { OpenAICreativeProvider } from "./openai-creative.js";
 export { OPENAI_CREATIVE_INSTRUCTIONS, OPENAI_CREATIVE_PROMPT_VERSION, OPENAI_NARRATION_REWRITE_INSTRUCTIONS } from "./openai-creative-prompt.js";
 export { OpenAIVoiceProvider, OPENAI_VOICE_DEFAULT_STYLE } from "./openai-voice.js";
+export { OpenAIAudioTranscriber } from "./openai-transcription.js";
 export { ElevenLabsVoiceProvider, normalizeElevenLabsAlignment } from "./elevenlabs-voice.js";
 export {
   CreatomateCompositionProvider,

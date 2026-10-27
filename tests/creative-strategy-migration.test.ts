@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 describe("creative strategy additive migrations", () => {
   it("adds isolated strategy persistence, immutable revisions, durable provider results, handoffs, and project links", async () => {
     const names = (await readdir(new URL("../db/migrations", import.meta.url))).filter((name) => name.endsWith(".sql")).sort();
-    expect(names.at(-1)).toBe("0021_product_personalization_visual_authority.sql");
+    expect(names.at(-1)).toBe("0022_provider_neutral_ai_source.sql");
     const sql = await readFile(new URL("../db/migrations/0016_creative_strategy.sql", import.meta.url), "utf8");
     for (const table of ["creative_strategy_batches", "creative_strategy_concepts", "creative_strategy_concept_revisions", "creative_strategy_provider_operations", "creative_strategy_handoffs"]) expect(sql).toContain(`CREATE TABLE ${table}`);
     expect(sql).toContain("result_payload jsonb");
@@ -62,5 +62,12 @@ describe("creative strategy additive migrations", () => {
     expect(sql).toContain("personalization_visual_authority IS NULL");
     expect(sql).not.toMatch(/NOT NULL|DEFAULT|UPDATE products|INSERT INTO/i);
     expect(sql).not.toMatch(/(?:DROP TABLE|TRUNCATE|DELETE FROM)/i);
+  });
+
+  it("widens AI source labels in migration 0022 while keeping legacy OPENAI rows valid and untouched", async () => {
+    const sql = await readFile(new URL("../db/migrations/0022_provider_neutral_ai_source.sql", import.meta.url), "utf8");
+    for (const table of ["variant_creative_package_revisions", "creative_strategy_concept_revisions", "creative_dna_revisions"]) expect(sql).toContain(`ADD CONSTRAINT ${table}_source_check`);
+    expect(sql.match(/'AI_PROVIDER','OPENAI'/g)).toHaveLength(3);
+    expect(sql).not.toMatch(/\b(?:UPDATE|INSERT INTO|DROP TABLE|TRUNCATE|DELETE FROM)\b/i);
   });
 });

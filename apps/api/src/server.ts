@@ -194,7 +194,7 @@ export function buildServer(runtime: Runtime = createRuntime()) {
       ...(project.creativeBrief?.productDetails ? { productDetails: project.creativeBrief.productDetails } : {}), cta: item.currentRevision.cta
     }, { operationKey, projectId, targetId: item.currentRevision.id });
     const narrationText = result.script.trim();
-    if (!narrationText) throw new DomainError("OPENAI_NARRATION_REWRITE_INVALID", "OpenAI returned an empty package narration rewrite.");
+    if (!narrationText) throw new DomainError("PROVIDER_NARRATION_REWRITE_INVALID", "OpenAI returned an empty package narration rewrite.");
     return runtime.variantPackages.saveRevision({ projectId, slot, angleName: item.currentRevision.angleName, hook: item.currentRevision.hook, narrationText, cta: item.currentRevision.cta, ...(item.currentRevision.secondaryOverlay ? { secondaryOverlay: item.currentRevision.secondaryOverlay } : {}), source: "OPENAI", providerMetadata: { provider: result.submission.provider, model: result.submission.model, requestId: result.submission.requestId, operationKey, promptVersion: "variant-narration-rewrite/v1" }, actor: actor(request as unknown as AuthenticatedRequest) });
   });  app.post("/api/projects/:id/variant-packages/generate", async (request) => {
     const projectId = (request.params as { id: string }).id; const project = await runtime.service.getProject(projectId); const concept = project.concepts.find((item) => item.id === project.currentConceptId);
@@ -202,7 +202,7 @@ export function buildServer(runtime: Runtime = createRuntime()) {
     if (!concept || !generator) throw new DomainError("VARIANT_COPY_GENERATION_UNAVAILABLE", "Configured creative provider cannot generate variant copy.");
     const result = await generator.call(runtime.creativeProvider, { productName: product.name, ...(product.description ? { productDetails: product.description } : {}), ...(project.creativeBrief?.creativeTopic ? { creativeTopic: project.creativeBrief.creativeTopic } : {}), approvedConcept: { angle: concept.angle, hook: concept.hook, voiceScript: concept.voiceScript, cta: concept.cta }, scenes: concept.scenes.map((scene) => ({ purpose: scene.purpose, generationPrompt: scene.generationPrompt })), targetDurationMs: concept.targetDurationMs }, { operationKey: `variant-copy:${projectId}:${randomUUID()}`, projectId, targetId: "creative-packages" });
     const slots = result.packages.map((item) => item.slot).sort().join(""); if (result.packages.length !== 4 || slots !== "ABCD") throw new DomainError("VARIANT_COPY_GENERATION_INVALID", "Exactly four complete creative packages are required.");
-    for (const item of result.packages) await runtime.variantPackages.saveRevision({ ...item, projectId, source: "OPENAI", providerMetadata: { provider: result.submission.provider, model: result.submission.model, requestId: result.submission.requestId, operationKey: result.submission.metadata.operationKey }, actor: actor(request as unknown as AuthenticatedRequest) });
+    for (const item of result.packages) await runtime.variantPackages.saveRevision({ ...item, projectId, source: "AI_PROVIDER", providerMetadata: { provider: result.submission.provider, model: result.submission.model, requestId: result.submission.requestId, operationKey: result.submission.metadata.operationKey }, actor: actor(request as unknown as AuthenticatedRequest) });
     return runtime.variantPackages.list(projectId);
   });
   app.post("/api/projects/:id/variant-packages/:slot/voice/generate", async (request) => {

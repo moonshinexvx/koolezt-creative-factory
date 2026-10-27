@@ -246,7 +246,7 @@ export type CreativeHandoffInputSnapshot = Readonly<{
 
 export type CreativeReferenceOperatorStatus = "WINNER" | "CONTROL" | "REFERENCE" | "LOSER";
 export type CreativeDnaStatus = "NOT_ANALYZED" | "ANALYZING" | "DRAFT" | "APPROVED" | "ARCHIVED" | "FAILED" | "SUBMISSION_UNKNOWN" | "RESULT_UNAVAILABLE";
-export type CreativeDnaEvidenceKind = "VISUAL_FRAME" | "MEDIA_METADATA" | "VISIBLE_TEXT" | "OPERATOR_TRANSCRIPT" | "OPERATOR_NOTE";
+export type CreativeDnaEvidenceKind = "VISUAL_FRAME" | "MEDIA_METADATA" | "VISIBLE_TEXT" | "OPERATOR_TRANSCRIPT" | "OPERATOR_NOTE" | "AUDIO_TRANSCRIPT" | "SCENE_CUT";
 export type CreativeDnaEvidence = Readonly<{ kind: CreativeDnaEvidenceKind; observation: string; timestampMs?: number; endTimestampMs?: number; frameSha256?: string }>;
 export type CreativeDnaMediaMetadata = Readonly<{ durationMs: number; width: number; height: number; frameRate?: number; hasAudio: boolean; mimeType: string }>;
 export type CreativePerformanceContext = Readonly<{ spend?: number; purchases?: number; purchaseCpa?: number; revenue?: number; roas?: number; linkCtr?: number; cpc?: number; cpm?: number; currency?: string; dateStart?: string; dateEnd?: string; metricSource?: string }>;
@@ -265,13 +265,23 @@ export type CreativeDnaDraft = Readonly<{
 }>;
 export type CreativeDnaRevision = CreativeDnaDraft & Readonly<{
   id: string; creativeReferenceId: string; revision: number; status: "DRAFT" | "APPROVED" | "ARCHIVED";
-  source: "OPENAI" | "OPERATOR_EDIT"; mediaMetadata: CreativeDnaMediaMetadata; operatorNotes?: string;
+  source: "AI_PROVIDER" | "OPENAI" | "OPERATOR_EDIT"; mediaMetadata: CreativeDnaMediaMetadata; operatorNotes?: string;
   providerMetadata: Readonly<Record<string, unknown>>; createdBy: string; createdAt: string;
 }>;
 export type SelectedWinnerDnaSnapshot = Omit<CreativeDnaRevision, "providerMetadata"> & Readonly<{ revisionSha256: string; referenceDisplayName: string }>;
 export type CreativeDnaFrame = Readonly<{ timestampMs: number; mimeType: "image/jpeg"; bytesBase64: string; sha256: string }>;
+/** Application-measured shot boundaries; scene cuts are detected by FFmpeg, not inferred by the model. */
+export type CreativeDnaPacing = Readonly<{ sceneCutsMs: readonly number[]; shotCount: number; averageShotMs: number; firstCutMs?: number; detectionThreshold: number }>;
+export type CreativeDnaTranscriptSegment = Readonly<{ startMs: number; endMs: number; text: string }>;
+export type CreativeDnaTranscription = Readonly<{ provider: string; model: string; language?: string; text: string; segments: readonly CreativeDnaTranscriptSegment[] }>;
+/** Machine transcript of the historical ad's audio track. An operator transcript, when supplied, takes precedence. */
+export type CreativeDnaAudioTranscript =
+  | (CreativeDnaTranscription & Readonly<{ status: "TRANSCRIBED" }>)
+  | Readonly<{ status: "NO_AUDIO" | "DISABLED" | "FAILED"; reason?: string }>;
+export type CreativeDnaPreprocessed = Readonly<{ mediaMetadata: CreativeDnaMediaMetadata; frames: readonly CreativeDnaFrame[]; pacing?: CreativeDnaPacing; audioTranscript?: CreativeDnaAudioTranscript }>;
 export type CreativeDnaAnalysisInput = Readonly<{
   referenceId: string; displayName: string; mediaMetadata: CreativeDnaMediaMetadata; frames: readonly CreativeDnaFrame[];
+  pacing?: CreativeDnaPacing; audioTranscript?: CreativeDnaAudioTranscript;
   operatorNotes?: string; operatorTranscript?: string; performance?: CreativePerformanceContext;
   currentProduct?: Readonly<{ name: string; description: string; verifiedClaims: readonly ProductClaim[] }>;
 }>;
@@ -331,7 +341,7 @@ export type StrategyConceptDraft = StrategyProviderConceptDraft & Readonly<{
 
 export type StrategyConceptRevision = StrategyConceptDraft & Readonly<{
   id: string; conceptId: string; batchId: string; revision: number;
-  source: "OPENAI" | "OPERATOR_REPLACEMENT";
+  source: "AI_PROVIDER" | "OPENAI" | "OPERATOR_REPLACEMENT";
   diversityState: StrategyDiversityState;
   productionSafetyState: StrategyProductionSafetyState;
   validationFindings: readonly string[];
@@ -493,7 +503,7 @@ export type NarrationRevision = Readonly<{
   revision: number;
   script: string;
   /** Concept copy is preserved; later manual/rewrite revisions are append-only. */
-  source: "CONCEPT" | "MANUAL" | "OPENAI_REWRITE";
+  source: "CONCEPT" | "MANUAL" | "AI_REWRITE" | "OPENAI_REWRITE";
   estimatedDurationMs: number;
   parentRevisionId?: string;
   provider?: string;
@@ -963,7 +973,12 @@ export interface MediaInspector {
 }
 
 export interface CreativeDnaPreprocessor {
-  preprocess(asset: GeneratedAsset): Promise<Readonly<{ mediaMetadata: CreativeDnaMediaMetadata; frames: readonly CreativeDnaFrame[] }>>;
+  preprocess(asset: GeneratedAsset): Promise<CreativeDnaPreprocessed>;
+}
+
+/** Speech-to-text for a historical ad's extracted audio. Failures are reported to the analysis, never retried by it. */
+export interface CreativeDnaTranscriber {
+  transcribe(input: Readonly<{ bytes: Uint8Array; mimeType: "audio/mpeg"; fileName: string; durationMs: number }>): Promise<CreativeDnaTranscription>;
 }
 
 export interface ReadyPublisher {

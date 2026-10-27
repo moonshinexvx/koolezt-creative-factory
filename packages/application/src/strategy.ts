@@ -303,7 +303,7 @@ function validateDraftSet(drafts: readonly StrategyConceptDraft[], input: Strate
       conceptId: `draft:${draft.ordinal}`,
       batchId: "draft",
       revision: 1,
-      source: "OPENAI",
+      source: "AI_PROVIDER",
       diversityState: "DISTINCT",
       productionSafetyState: "PRODUCTION_SAFE",
       validationFindings: [],
@@ -419,7 +419,7 @@ export class CreativeStrategyService {
       try {
         response = await provider.retrieveStrategyConcepts(operation.responseId);
       } catch (error) {
-        if (error instanceof DomainError && error.code === "OPENAI_STRATEGY_RESULT_UNAVAILABLE") {
+        if (error instanceof DomainError && error.code === "PROVIDER_STRATEGY_RESULT_UNAVAILABLE") {
           await this.dependencies.strategies.failOperation(operation.id, "RESULT_UNAVAILABLE", error.message);
           await this.dependencies.strategies.setBatchState(batch.id, "RESULT_UNAVAILABLE", polledAt);
           throw new DomainError("STRATEGY_RESULT_UNAVAILABLE", "The known Strategy response is no longer retrievable; automatic resubmission is disabled.");
@@ -475,7 +475,7 @@ export class CreativeStrategyService {
     if (!response.outputText) {
       await this.dependencies.strategies.failOperation(operationId, "FAILED", "The completed Strategy response contained no structured output.");
       await this.dependencies.strategies.setBatchState(batch.id, "FAILED", this.now());
-      throw new DomainError("OPENAI_STRATEGY_INVALID", "The completed Strategy response contained no structured output.");
+      throw new DomainError("PROVIDER_STRATEGY_INVALID", "The completed Strategy response contained no structured output.");
     }
     let concepts: readonly StrategyProviderConceptDraft[];
     try {
@@ -484,13 +484,13 @@ export class CreativeStrategyService {
     } catch {
       await this.dependencies.strategies.failOperation(operationId, "FAILED", "The completed Strategy response contained malformed structured output.");
       await this.dependencies.strategies.setBatchState(batch.id, "FAILED", this.now());
-      throw new DomainError("OPENAI_STRATEGY_INVALID", "OpenAI returned malformed structured Strategy data.");
+      throw new DomainError("PROVIDER_STRATEGY_INVALID", "OpenAI returned malformed structured Strategy data.");
     }
     const expectedCount = input.replacementOrdinals?.length ?? input.requestedCount;
     if (concepts.length !== expectedCount) {
       await this.dependencies.strategies.failOperation(operationId, "FAILED", "The completed Strategy response returned the wrong number of concepts.");
       await this.dependencies.strategies.setBatchState(batch.id, "FAILED", this.now());
-      throw new DomainError("OPENAI_STRATEGY_INVALID", "OpenAI returned the wrong number of Strategy concepts.");
+      throw new DomainError("PROVIDER_STRATEGY_INVALID", "OpenAI returned the wrong number of Strategy concepts.");
     }
     const result = { concepts, submission: { provider: response.provider, model: response.model, providerTaskId: response.responseId, requestId: response.responseId, metadata: sanitizeMetadata({ promptVersion: "creative-strategy/v1", operationKey, ...response.usage }) } };
     await this.dependencies.strategies.completeOperation(operationId, result);
@@ -529,7 +529,7 @@ export class CreativeStrategyService {
           repair: submissionMetadata(repair.submission)
         };
       }
-      await this.dependencies.strategies.saveGeneratedConcepts({ batchId: batch.id, concepts: drafts, source: "OPENAI", actor: batch.createdBy, providerMetadata, timestamp: this.now() });
+      await this.dependencies.strategies.saveGeneratedConcepts({ batchId: batch.id, concepts: drafts, source: "AI_PROVIDER", actor: batch.createdBy, providerMetadata, timestamp: this.now() });
       concepts = await this.dependencies.strategies.listConcepts(batch.id);
       batch = await this.dependencies.strategies.getBatch(batch.id);
       const validation = validateStrategySet(concepts, batch.inputSnapshot);

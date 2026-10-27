@@ -3,7 +3,8 @@ import { CompositionProviderRegistry, CreativeDnaService, CreativeFactoryService
 import { DesktopCompositionProvider, PostgresCreativeDnaStore, PostgresCreativeStrategyStore, PostgresDesktopRenderJobStore, PostgresDurableMediaAssetCatalog, PostgresExternalMediaStagingStore, PostgresFactoryRepository, PostgresMediaAssetCatalog, PostgresRenderWorkerIdentityStore, PostgresProjectArchiveStore, PostgresVariantCreativePackageStore, PostgresVariantFactoryStore, createPostgresPool } from "@koolezt/infrastructure";
 import { CloudflareAccessVerifier } from "./browser-auth.js";
 import { DurableReadyPublisher, FakeExternalMediaDeliveryProvider, FfmpegCreativeDnaPreprocessor, FfprobeMediaInspector, HybridDurableMediaStore, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, S3DurableMediaStore, S3ExternalMediaDeliveryProvider, StorageBackedMediaInspector } from "@koolezt/media";
-import { CreatomateCompositionProvider, CreatomateOutputIngestor, ElevenLabsVoiceProvider, FakeCompositionProvider, FakeCreativeProvider, FakeVideoGenerationProvider, FakeVoiceProvider, HttpCreatomateTransport, HttpKlingTransport, HttpSeedanceTransport, KlingOutputIngestor, KlingVideoGenerationProvider, OpenAICreativeProvider, OpenAIVoiceProvider, OPENAI_VOICE_DEFAULT_STYLE, RoutedVideoOutputIngestor, SeedanceOutputIngestor, SeedanceVideoGenerationProvider, UnavailableCompositionProvider, UnavailableVideoGenerationProvider } from "@koolezt/providers";
+import { ClaudeCreativeProvider, CreatomateCompositionProvider, OpenAIAudioTranscriber, CreatomateOutputIngestor, ElevenLabsVoiceProvider, FakeCompositionProvider, FakeCreativeProvider, FakeVideoGenerationProvider, FakeVoiceProvider, HttpCreatomateTransport, HttpKlingTransport, HttpSeedanceTransport, KlingOutputIngestor, KlingVideoGenerationProvider, OpenAICreativeProvider, OpenAIVoiceProvider, OPENAI_VOICE_DEFAULT_STYLE, RoutedVideoOutputIngestor, SeedanceOutputIngestor, SeedanceVideoGenerationProvider, UnavailableCompositionProvider, UnavailableVideoGenerationProvider } from "@koolezt/providers";
+import type { ClaudeEffort } from "@koolezt/providers";
 
 export function createRuntime(env = process.env) {
   const databaseUrl = env.DATABASE_URL;
@@ -50,14 +51,27 @@ export function createRuntime(env = process.env) {
   if (browserAuthProvider === "cloudflare" && (!browserAuthSettings.teamDomain || !browserAuthSettings.audience || browserAuthSettings.ownerEmails.length === 0)) throw new Error("Cloudflare browser access requires team domain, application audience, and at least one owner email.");
   if (browserAuthProvider === "cloudflare") { const url = new URL(browserAuthSettings.teamDomain); if (url.protocol !== "https:" || !url.hostname.endsWith(".cloudflareaccess.com")) throw new Error("CLOUDFLARE_ACCESS_TEAM_DOMAIN must be the trusted HTTPS Cloudflare Access team domain."); }
   const browserAuth = browserAuthProvider === "cloudflare" ? new CloudflareAccessVerifier(browserAuthSettings) : undefined;
-  const creativeProvider = env.CREATIVE_PROVIDER === "openai"
+  const resolveReferenceUrl = durableMediaStore ? { resolveReferenceUrl: async (assetId: string) => (await durableMediaStore.getDownloadReference(assetId)).url } : {};
+  const claudeEffort = (name: string, fallback: ClaudeEffort): ClaudeEffort => {
+    const value = env[name] ?? fallback;
+    if (!["low", "medium", "high", "xhigh", "max"].includes(value)) throw new Error(`${name} must be low, medium, high, xhigh, or max.`);
+    return value as ClaudeEffort;
+  };
+  const creativeProvider = env.CREATIVE_PROVIDER === "claude"
+    ? new ClaudeCreativeProvider({
+        apiKey: env.ANTHROPIC_API_KEY ?? "",
+        model: env.CLAUDE_CREATIVE_MODEL ?? "claude-opus-5-5",
+        backgroundEffort: claudeEffort("CLAUDE_BACKGROUND_EFFORT", "medium"),
+        interactiveEffort: claudeEffort("CLAUDE_INTERACTIVE_EFFORT", "low"),
+        ...resolveReferenceUrl
+      })
+    : env.CREATIVE_PROVIDER === "openai"
     ? new OpenAICreativeProvider({
         apiKey: env.OPENAI_API_KEY ?? "",
         model: env.OPENAI_CREATIVE_MODEL ?? "",
         strategyTransportTimeoutMs,
         conceptTransportTimeoutMs,
-        ...(durableMediaStore ? { resolveReferenceUrl: async (assetId: string) =>
-          (await durableMediaStore.getDownloadReference(assetId)).url } : {})
+        ...resolveReferenceUrl
       })
     : new FakeCreativeProvider();
   const voiceProvider = env.VOICE_PROVIDER === "elevenlabs"
@@ -96,7 +110,7 @@ export function createRuntime(env = process.env) {
       )
     : new UnavailableVideoGenerationProvider("seedance", env.SEEDANCE_VIDEO_MODEL ?? "dreamina-seedance-2-5-260628", env.SEEDANCE_API_KEY ? "EXTERNAL_MEDIA_DELIVERY_CONFIGURATION_MISSING" : "SEEDANCE_CONFIGURATION_MISSING", env.SEEDANCE_API_KEY ? "Seedance requires S3 external-media delivery." : "SEEDANCE_API_KEY is required when Seedance is selected.");
   const videoProviders = new VideoProviderRegistry({ fake: fakeVideoProvider, kling: klingVideoProvider, seedance: seedanceVideoProvider }, defaultVideoProviderKey);
-  if (env.CREATIVE_PROVIDER && env.CREATIVE_PROVIDER !== "fake" && env.CREATIVE_PROVIDER !== "openai") throw new Error("CREATIVE_PROVIDER must be fake or openai.");
+  if (env.CREATIVE_PROVIDER && !["fake", "claude", "openai"].includes(env.CREATIVE_PROVIDER)) throw new Error("CREATIVE_PROVIDER must be fake, claude, or openai.");
   if (env.VOICE_PROVIDER && env.VOICE_PROVIDER !== "fake" && env.VOICE_PROVIDER !== "elevenlabs" && env.VOICE_PROVIDER !== "openai") throw new Error("VOICE_PROVIDER must be fake, elevenlabs, or openai.");
   const service = new CreativeFactoryService({
       repository,
@@ -122,7 +136,12 @@ export function createRuntime(env = process.env) {
       creativeDnaRepository: creativeDna
     });
   const strategyService = new CreativeStrategyService({ repository, strategies, creativeProvider, creativeDna });
-  const creativeDnaService = new CreativeDnaService({ repository, dna:creativeDna, provider:creativeProvider, storage, preprocessor:new FfmpegCreativeDnaPreprocessor(storage,env.FFMPEG_PATH??"ffmpeg",env.FFPROBE_PATH??"ffprobe") });
+  const dnaTranscriptionProvider = (env.DNA_TRANSCRIPTION_PROVIDER ?? "disabled").toLowerCase();
+  if (!["disabled", "openai"].includes(dnaTranscriptionProvider)) throw new Error("DNA_TRANSCRIPTION_PROVIDER must be disabled or openai.");
+  const dnaTranscriber = dnaTranscriptionProvider === "openai" ? new OpenAIAudioTranscriber({ apiKey: env.OPENAI_API_KEY ?? "", model: env.OPENAI_TRANSCRIBE_MODEL ?? "whisper-1" }) : undefined;
+  const creativeDnaMaxFrames = Number(env.CREATIVE_DNA_MAX_FRAMES ?? "30");
+  if (!Number.isInteger(creativeDnaMaxFrames) || creativeDnaMaxFrames < 12 || creativeDnaMaxFrames > 60) throw new Error("CREATIVE_DNA_MAX_FRAMES must be an integer between 12 and 60.");
+  const creativeDnaService = new CreativeDnaService({ repository, dna:creativeDna, provider:creativeProvider, storage, preprocessor:new FfmpegCreativeDnaPreprocessor(storage,env.FFMPEG_PATH??"ffmpeg",env.FFPROBE_PATH??"ffprobe",{maxFrames:creativeDnaMaxFrames,...(dnaTranscriber?{transcriber:dnaTranscriber}:{})}) });
   return {
     pool,
     repository,
