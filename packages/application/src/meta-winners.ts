@@ -62,12 +62,11 @@ export class MetaWinnerService {
     const ad = { accountId: input.accountId, adId: input.adId, adName: creative.adName, ...(creative.thumbnailUrl ? { thumbnailUrl: creative.thumbnailUrl } : {}) };
     if (!sourceUrl) return { status: "VIDEO_REQUIRED", ad };
     if (!isMetaVideoUrl(sourceUrl)) throw new DomainError("META_VIDEO_URL_UNTRUSTED", "Meta returned an unexpected video location; upload the video manually.");
-    const campaign = await this.d.dna.campaignProjectForProduct(input.productId);
     const results = await this.d.gateway.lifetimeResults(input.accountId, input.adId);
     const bytes = await this.d.downloadVideo(sourceUrl);
     if (bytes.byteLength < 12 || Buffer.from(bytes.subarray(4, 8)).toString("latin1") !== "ftyp") throw new DomainError("META_VIDEO_INVALID", "The downloaded Meta video is not an MP4 file.");
-    const asset = await this.d.storage.put(`projects/${campaign.id}/creative-references/${randomUUID()}.mp4`, { bytes, mimeType: "video/mp4", extension: "mp4", metadata: { projectId: campaign.id, purpose: "CREATIVE_REFERENCE", originalFilename: `${creative.adName.slice(0, 200)}.mp4`, uploadedBy: input.actor, source: "meta-ads", metaAdId: input.adId } });
-    const reference = await this.d.dna.register({ projectId: campaign.id, productId: input.productId, assetId: asset.id, displayName: (input.displayName?.trim() || creative.adName).slice(0, 160), operatorStatus: "WINNER", platform: "Meta / Facebook", actor: input.actor, ...(results?.dateStart ? { dateStart: results.dateStart } : {}), ...(results?.dateEnd ? { dateEnd: results.dateEnd } : {}), ...(results ? { performance: performanceFromMeta(results) } : {}) });
+    const asset = await this.d.storage.put(`products/${input.productId}/winners/${randomUUID()}.mp4`, { bytes, mimeType: "video/mp4", extension: "mp4", metadata: { projectId: input.productId, purpose: "WINNER_SOURCE_VIDEO", originalFilename: `${creative.adName.slice(0, 200)}.mp4`, uploadedBy: input.actor, source: "meta-ads", metaAdId: input.adId } });
+    const reference = await this.d.dna.register({ productId: input.productId, assetId: asset.id, displayName: (input.displayName?.trim() || creative.adName).slice(0, 160), operatorStatus: "WINNER", platform: "Meta / Facebook", actor: input.actor, ...(results?.dateStart ? { dateStart: results.dateStart } : {}), ...(results?.dateEnd ? { dateEnd: results.dateEnd } : {}), ...(results ? { performance: performanceFromMeta(results) } : {}) });
     await this.saveLink(reference.id, input.accountId, creative, results);
     await this.d.dna.requestAnalysis(reference.id, randomUUID());
     return { status: "IMPORTED", referenceId: reference.id };

@@ -1,13 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
-import { Queue } from "bullmq";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CreativeDnaService, CreativeFactoryService } from "@koolezt/application";
 import type { CreativeDnaPreprocessor, CreativeProvider, GeneratedAsset, MediaPayload, StorageProvider, StrategyProviderResponse } from "@koolezt/domain";
 import {
-  createPostgresPool, createRedisConnection, createWorkflowWorker, OutboxDispatcher,
-  PostgresCreativeDnaStore, PostgresDurableMediaAssetCatalog, PostgresFactoryRepository, PostgresMediaAssetCatalog,
-  PostgresOutboxStore, WORKFLOW_QUEUE_NAME
+  createPostgresPool, PostgresCreativeDnaStore, PostgresDurableMediaAssetCatalog, PostgresFactoryRepository, PostgresMediaAssetCatalog,
+  PostgresWinnerJobStore
 } from "@koolezt/infrastructure";
 import { FakeCompositionProvider, FakeCreativeProvider, FakeVideoGenerationProvider, FakeVoiceProvider } from "@koolezt/providers";
 
@@ -75,7 +73,7 @@ async function harness(databaseUrl: string, provider: CreativeProvider) {
     externalMediaDelivery: {} as never, compositionOutputIngestor: {} as never,
     storage, mediaInspector: {} as never, readyPublisher: {} as never
   });
-  const service = new CreativeDnaService({ repository, dna, provider, storage, preprocessor });
+  const service = new CreativeDnaService({ repository, dna, jobs: new PostgresWinnerJobStore(pool), provider, storage, preprocessor });
   const project = await factory.createProjectFromBrief({
     requestId: randomUUID(), name: "DNA integration product", creativeTopic: "Historical winner learning",
     productDetails: "Personalized product shown in supplied references.", verifiedClaims: [],
@@ -88,11 +86,6 @@ async function harness(databaseUrl: string, provider: CreativeProvider) {
     performance: { spend: 100, purchases: 4, purchaseCpa: 25, currency: "USD", metricSource: "operator supplied" }
   });
   return { pool, repository, dna, storage, factory, service, project, reference, videoProvider, voiceProvider, compositionProvider, dispose: async () => { await pool.end(); } };
-}
-async function waitFor(check: () => Promise<boolean>, timeoutMs = 60_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) { if (await check()) return; await new Promise((resolve) => setTimeout(resolve, 50)); }
-  throw new Error("Timed out waiting for Creative DNA workflow.");
 }
 
 integration("Milestone 7C.14 PostgreSQL/Redis acceptance", () => {
@@ -226,44 +219,6 @@ integration("Milestone 7C.14 PostgreSQL/Redis acceptance", () => {
       expect((await setup.pool.query("SELECT status,lifecycle_status FROM media_assets WHERE id=$1", [unreferenced.id])).rows[0]).toMatchObject({ status: "DELETED", lifecycle_status: "CLEANED" });
     } finally { await setup.dispose(); }
   });
-
-  it("processes an explicit analysis through PostgreSQL, Redis and outbox without media provider calls or secrets", async () => {
-    const base = new FakeCreativeProvider();
-    const secret = "must-not-persist-provider-secret";
-    const provider: CreativeProvider = {
-      generateConcept: base.generateConcept.bind(base),
-      submitCreativeDnaAnalysis: async (input, context) => base.submitCreativeDnaAnalysis!(input, context),
-      retrieveCreativeDnaAnalysis: base.retrieveCreativeDnaAnalysis.bind(base)
-    };
-    const setup = await harness(runtimeUrl!, provider);
-    const connection = createRedisConnection(redisUrl!);
-    const queue = new Queue(WORKFLOW_QUEUE_NAME, { connection });
-    const dispatcher = new OutboxDispatcher(new PostgresOutboxStore(setup.pool), queue);
-    let worker: ReturnType<typeof createWorkflowWorker> | undefined;
-    try {
-      await connection.flushdb();
-      const job = await setup.service.requestAnalysis(setup.reference.id, randomUUID());
-      expect(base.calls).toHaveLength(0);
-      worker = createWorkflowWorker(connection, setup.service, 1);
-      expect(await dispatcher.dispatchAvailable()).toBeGreaterThanOrEqual(1);
-      await waitFor(async () => (await setup.repository.getJob(job.id)).status === "COMPLETED");
-      expect((await setup.repository.getJob(job.id)).lastError).toBeUndefined();
-      const record = (await setup.service.list())[0]!;
-      expect(record.reference.analysisStatus).toBe("DRAFT");
-      expect(record.revisions).toHaveLength(1);
-      const operation = await setup.pool.query("SELECT status,response_id,result_sha256,provider_metadata,result_payload FROM creative_dna_provider_operations WHERE creative_reference_id=$1", [setup.reference.id]);
-      expect(operation.rows[0]).toMatchObject({ status: "SUCCEEDED" });
-      expect(operation.rows[0].response_id).toMatch(/^fake-dna-/);
-      expect(operation.rows[0].result_sha256).toHaveLength(64);
-      expect(JSON.stringify(operation.rows[0])).not.toContain(secret);
-      expect(JSON.stringify(operation.rows[0]).toLowerCase()).not.toContain("authorization");
-      expect(setup.videoProvider.submissions).toHaveLength(0);
-      expect(setup.voiceProvider.submissions).toHaveLength(0);
-      expect(setup.compositionProvider.submissions).toHaveLength(0);
-    } finally {
-      await worker?.close(); await queue.close(); await connection.quit(); await setup.dispose();
-    }
-  }, 90_000);
 
   it("persists a known response ID and resumes retrieval after worker restart without another create", async () => {
     const base = new FakeCreativeProvider();

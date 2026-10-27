@@ -408,3 +408,5 @@ export { S3ExternalMediaDeliveryProvider } from "./external-media-delivery.js";
 export { DurableReadyPublisher, S3DurableMediaStore, StorageBackedMediaInspector } from "./durable-media.js";
 export type { DurableAssetCatalog } from "./durable-media.js";
 export { HybridDurableMediaStore } from "./durable-media.js";
+export { buildPlanVideoArguments, defaultRenderFontPath, filterPath, foregroundBox, planTimeline, PlanVideoRenderer, wrapText } from "./plan-video-renderer.js";
+export type { PlanRenderInput, PlanRenderScene } from "./plan-video-renderer.js";

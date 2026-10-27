@@ -275,7 +275,7 @@ export type CreativeMetaLink = Readonly<{
   currency?: string; metrics?: MetaAdMetrics; dateStart?: string; dateEnd?: string; syncedAt?: string; syncError?: string; createdAt: string; updatedAt: string;
 }>;
 export type CreativeReference = Readonly<{
-  id: string; displayName: string; sourceProjectId: string; productId?: string; sourceAssetId: string; operatorStatus: CreativeReferenceOperatorStatus;
+  id: string; displayName: string; sourceProjectId?: string; productId?: string; sourceAssetId: string; operatorStatus: CreativeReferenceOperatorStatus;
   operatorNotes?: string; operatorTranscript?: string; dateStart?: string; dateEnd?: string; platform?: string;
   performance?: CreativePerformanceContext; analysisStatus: CreativeDnaStatus; approvedRevisionId?: string; createdBy: string; createdAt: string; updatedAt: string;
 }>;
@@ -335,6 +335,54 @@ export type WinnerMeasurements = Readonly<{
   audioPresentRatio?: number; integratedLufs?: number;
   performance?: Readonly<{ spend?: number; purchases?: number; revenue?: number; cpa?: number; roas?: number; linkCtr?: number; cpc?: number; cpm?: number; currency?: string; dateStart?: string; dateEnd?: string; metricSource?: string; impressions?: number; threeSecondViews?: number; thruPlays?: number; hookRate?: number; holdRate?: number }>;
 }>;
+/** Background work for the winner-to-video app. Jobs run one at a time in the worker. */
+export type WinnerJobKind = "ANALYZE_WINNER" | "WRITE_VIDEO_PLANS" | "RENDER_VIDEO";
+export type WinnerJobStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+export type WinnerJob = Readonly<{
+  id: string; kind: WinnerJobKind; targetId: string; operationKey: string; status: WinnerJobStatus; attempts: number;
+  nextAttemptAt?: string; lastError?: string; createdAt: string; updatedAt: string;
+}>;
+export interface WinnerJobRepository {
+  /** Idempotent on operationKey: a repeated request returns the existing job. */
+  enqueue(job: WinnerJob): Promise<WinnerJob>;
+  /** Claims the oldest due job; a RUNNING job older than staleAfterMs is reclaimed. */
+  claimNext(now: string, staleAfterMs: number): Promise<WinnerJob | undefined>;
+  finish(id: string, outcome: Readonly<{ status: "COMPLETED" | "FAILED" | "PENDING"; lastError?: string; nextAttemptAt?: string }>, timestamp: string): Promise<void>;
+  list(targetId?: string): Promise<readonly WinnerJob[]>;
+}
+
+export const VIDEO_PLAN_MOTIONS = ["ZOOM_IN", "ZOOM_OUT", "PAN_LEFT", "PAN_RIGHT"] as const;
+export type VideoPlanMotion = (typeof VIDEO_PLAN_MOTIONS)[number];
+export type VideoPlanScene = Readonly<{ photoAssetId: string; motion: VideoPlanMotion; caption: string; durationMs: number }>;
+/** One new video based on a winner: what it keeps, what it changes, and exactly what to render. */
+export type VideoPlan = Readonly<{ title: string; keepsFromWinner: string; changes: string; hookText: string; voiceover: string; scenes: readonly VideoPlanScene[]; ctaText: string }>;
+export type WinnerVideoBatchStatus = "WRITING" | "READY" | "FAILED";
+export type WinnerVideoBatch = Readonly<{
+  id: string; creativeReferenceId: string; productId: string; requestedCount: 3 | 6 | 12; targetDurationMs: 15_000 | 30_000;
+  status: WinnerVideoBatchStatus; failureMessage?: string; providerMetadata: Readonly<Record<string, unknown>>; createdBy: string; createdAt: string; updatedAt: string;
+}>;
+export type WinnerVideoStatus = "PLANNED" | "QUEUED" | "RENDERING" | "READY" | "FAILED";
+export type WinnerVideo = Readonly<{
+  id: string; batchId: string; ordinal: number; plan: VideoPlan; status: WinnerVideoStatus;
+  outputAssetId?: string; durationMs?: number; failureMessage?: string; createdAt: string; updatedAt: string;
+}>;
+export interface WinnerVideoRepository {
+  createBatch(batch: WinnerVideoBatch): Promise<void>;
+  updateBatch(batch: WinnerVideoBatch): Promise<void>;
+  getBatch(id: string): Promise<WinnerVideoBatch>;
+  listBatches(creativeReferenceId?: string): Promise<readonly WinnerVideoBatch[]>;
+  saveVideos(videos: readonly WinnerVideo[]): Promise<void>;
+  updateVideo(video: WinnerVideo): Promise<void>;
+  getVideo(id: string): Promise<WinnerVideo>;
+  listVideos(batchId?: string): Promise<readonly WinnerVideo[]>;
+}
+export type VideoPlanInput = Readonly<{
+  requestedCount: 3 | 6 | 12; targetDurationMs: number;
+  product: Readonly<{ name: string; description: string; facts: readonly string[]; lookRules?: unknown }>;
+  photos: readonly Readonly<{ index: number; label: string; mimeType: string; bytesBase64: string }>[];
+  winner: Readonly<{ name: string; report?: unknown; dna?: unknown; measurements?: unknown; metaResults?: unknown }>;
+}>;
+
 export type CreativeWinnerReportStatus = "PENDING" | "READY" | "FAILED";
 export type CreativeWinnerReportRecord = Readonly<{
   creativeReferenceId: string; status: CreativeWinnerReportStatus; report?: WinnerReport; measurements?: WinnerMeasurements;
@@ -921,6 +969,8 @@ export interface CreativeProvider {
   submitStrategyConcepts?(input: StrategyGenerationInput, context: ProviderOperationContext): Promise<StrategyProviderResponse>;
   /** Retrieves an already-submitted Strategy response. This method must never create a new response. */
   retrieveStrategyConcepts?(responseId: string): Promise<StrategyProviderResponse>;
+  /** Writes new video plans based on an analyzed winner; photos are referenced by their 1-based index. */
+  planWinnerVideos?(input: VideoPlanInput, context: ProviderOperationContext): Promise<Readonly<{ plans: readonly unknown[]; submission: ProviderSubmission }>>;
   /** Explicit historical-ad analysis. Submission returns a durable background response ID. */
   submitCreativeDnaAnalysis?(input: CreativeDnaAnalysisInput, context: ProviderOperationContext): Promise<CreativeDnaProviderResponse>;
   /** Retrieves only the known response and must never create a replacement request. */

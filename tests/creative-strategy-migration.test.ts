@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 describe("creative strategy additive migrations", () => {
   it("adds isolated strategy persistence, immutable revisions, durable provider results, handoffs, and project links", async () => {
     const names = (await readdir(new URL("../db/migrations", import.meta.url))).filter((name) => name.endsWith(".sql")).sort();
-    expect(names.at(-1)).toBe("0025_creative_reference_archive.sql");
+    expect(names.at(-1)).toBe("0027_remove_campaign_data.sql");
     const sql = await readFile(new URL("../db/migrations/0016_creative_strategy.sql", import.meta.url), "utf8");
     for (const table of ["creative_strategy_batches", "creative_strategy_concepts", "creative_strategy_concept_revisions", "creative_strategy_provider_operations", "creative_strategy_handoffs"]) expect(sql).toContain(`CREATE TABLE ${table}`);
     expect(sql).toContain("result_payload jsonb");
@@ -92,5 +92,24 @@ describe("creative strategy additive migrations", () => {
     const sql = await readFile(new URL("../db/migrations/0025_creative_reference_archive.sql", import.meta.url), "utf8");
     expect(sql).toContain("ADD COLUMN archived_at timestamptz");
     expect(sql).not.toMatch(/DELETE FROM|DROP TABLE|TRUNCATE|NOT NULL/i);
+  });
+
+  it("adds the winner-to-video tables and lets winners exist without a campaign", async () => {
+    const sql = await readFile(new URL("../db/migrations/0026_winner_video_app.sql", import.meta.url), "utf8");
+    for (const table of ["winner_jobs", "winner_video_batches", "winner_videos"]) expect(sql).toContain(`CREATE TABLE ${table}`);
+    expect(sql).toContain("ALTER TABLE creative_references ALTER COLUMN source_project_id DROP NOT NULL");
+    expect(sql).toContain("operation_key text NOT NULL UNIQUE");
+    expect(sql).not.toMatch(/\b(?:UPDATE|INSERT INTO|DROP TABLE|TRUNCATE|DELETE FROM)\b/i);
+  });
+
+  it("removes campaign data only after unlinking winners, without cascading, and aborts if kept data changes", async () => {
+    const sql = await readFile(new URL("../db/migrations/0027_remove_campaign_data.sql", import.meta.url), "utf8");
+    expect(sql.indexOf("UPDATE creative_references SET source_project_id = NULL")).toBeLessThan(sql.indexOf("TRUNCATE TABLE"));
+    expect(sql).not.toMatch(/CASCADE|DROP TABLE/i);
+    expect(sql).toContain("RAISE EXCEPTION 'Campaign cleanup would change kept data; nothing was removed.'");
+    for (const kept of ["creative_references", "creative_dna_revisions", "creative_winner_reports", "creative_meta_ad_links", "products", "product_assets", "product_claims", "media_assets"]) {
+      expect(sql).toContain(`FROM ${kept})`);
+      expect(sql.slice(sql.indexOf("TRUNCATE TABLE"), sql.indexOf(";", sql.indexOf("TRUNCATE TABLE")))).not.toMatch(new RegExp(`\b${kept}\b`));
+    }
   });
 });

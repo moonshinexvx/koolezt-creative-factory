@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CreativeDnaService, CreativeFactoryService, isMetaVideoUrl, MetaWinnerService, performanceFromMeta } from "@koolezt/application";
-import { calendarDay, InMemoryCreativeDnaStore, InMemoryCreativeStrategyStore, InMemoryFactoryRepository } from "@koolezt/infrastructure";
+import { calendarDay, InMemoryCreativeDnaStore, InMemoryCreativeStrategyStore, InMemoryFactoryRepository, InMemoryWinnerJobStore } from "@koolezt/infrastructure";
 import { FakeExternalMediaDeliveryProvider, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, MetadataMediaInspector } from "@koolezt/media";
 import { FakeCompositionProvider, FakeCreativeProvider, FakeVideoGenerationProvider, FakeVoiceProvider, HttpMetaAdsGateway, metaAdMetrics, normalizeAdAccountId } from "@koolezt/providers";
 import type { CreativeDnaPreprocessor, MetaAdsGateway, MetaAdSummary } from "@koolezt/domain";
@@ -110,7 +110,7 @@ async function harness(gatewayOverrides: Partial<MetaAdsGateway> = {}) {
   const provider = new FakeCreativeProvider();
   const factory = new CreativeFactoryService({ repository, strategyRepository: new InMemoryCreativeStrategyStore(repository), creativeDnaRepository: dna, creativeProvider: provider, videoProvider: new FakeVideoGenerationProvider(), voiceProvider: new FakeVoiceProvider(), compositionProvider: new FakeCompositionProvider(), externalMediaDelivery: new FakeExternalMediaDeliveryProvider(), compositionOutputIngestor: new InlineCompositionOutputIngestor(), storage, mediaInspector: new MetadataMediaInspector(), readyPublisher: new LocalReadyPublisher(join(root, "ready"), storage) });
   const project = await factory.createProjectFromBrief({ requestId: crypto.randomUUID(), name: "Dog address sign", creativeTopic: "Winners", productDetails: "A personalized address sign.", verifiedClaims: ["Displays your address"], targetDurationSeconds: 15, actor: "owner" });
-  const dnaService = new CreativeDnaService({ repository, dna, provider, storage, preprocessor });
+  const dnaService = new CreativeDnaService({ repository, dna, jobs: new InMemoryWinnerJobStore(), provider, storage, preprocessor });
   const results: MetaAdSummary = { accountId: "act_123456", adId: "555", adName: "Dog sign UGC v3", currency: "USD", dateStart: "2026-09-01", dateEnd: "2026-10-26", metrics: metaAdMetrics(row) };
   const gateway: MetaAdsGateway = {
     accountIds: ["act_123456"], listAccounts: async () => [{ id: "act_123456", name: "Koolezt", currency: "USD" }], topAds: async () => [results],
@@ -130,7 +130,7 @@ describe("Meta winner import", () => {
       expect(result.status).toBe("IMPORTED");
       const referenceId = (result as { referenceId: string }).referenceId;
       const reference = await setup.dna.getReference(referenceId);
-      expect(reference).toMatchObject({ displayName: "Dog sign UGC v3", sourceProjectId: setup.project.id, platform: "Meta / Facebook", analysisStatus: "ANALYZING", performance: { roas: 4, hookRate: 0.35 } });
+      expect(reference).toMatchObject({ displayName: "Dog sign UGC v3", productId: setup.project.productId, platform: "Meta / Facebook", analysisStatus: "ANALYZING", performance: { roas: 4, hookRate: 0.35 } });
       expect(await setup.dna.listMetaLinks()).toEqual([expect.objectContaining({ creativeReferenceId: referenceId, adId: "555", videoId: "888", metrics: expect.objectContaining({ purchases: 4 }) })]);
       expect(setup.downloadVideo).toHaveBeenCalledWith("https://video.xx.fbcdn.net/v/abc.mp4");
       expect((await setup.service.topAds("act_123456", "2026-09-01", "2026-10-26"))[0]).toMatchObject({ importedReferenceId: referenceId });

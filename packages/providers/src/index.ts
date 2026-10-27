@@ -21,7 +21,8 @@ import type {
   VideoGenerationOutput,
   VoiceProvider,
   VariantCreativePackageDraft,
-  VariantPackageGenerationInput
+  VariantPackageGenerationInput,
+  VideoPlanInput
 } from "@koolezt/domain";
 import { readFile } from "node:fs/promises";
 export { ClaudeCreativeProvider, schemaViolation, toClaudeSchema } from "./claude-creative.js";
@@ -176,6 +177,18 @@ export class FakeCreativeProvider implements CreativeProvider {
     const end=input.mediaMetadata.durationMs;const winnerReport={verdict:{summary:"Fake report: product-first opening with a clear spoken CTA.",reasons:[{title:"Product visible from frame one",explanation:"The finished product is on screen in the first frame.",confidence:"HIGH",evidence:[{source:"FRAME",detail:"Opening frame shows the product",timestampMs:first?.timestampMs??0,endTimestampMs:null}]}]},hook:{visualHook:"Product shown immediately",textHook:"",spokenHook:"",hookType:"PRODUCT_REVEAL",productFirstVisibleMs:0,whyItStops:"Immediate product clarity",strength:"STRONG"},angle:{coreAngle:"Personalized pride",buyerMotivation:"Make the home feel personal",desireOrProblem:"Generic decor",emotionalTriggers:["pride"],awarenessLevel:"PRODUCT_AWARE",promise:"A sign that is yours",proof:"Visual demonstration",offer:"",objectionsHandled:[],cta:"Customize yours",ctaTimestampMs:null},timeline:[{startMs:0,endMs:end,beat:"HOOK",visual:"Product in context",voiceLine:"",onScreenText:"",purpose:"Show the product"}],voice:{deliveryStyle:"Not assessed by the fake provider",scriptStructure:"",keyPhrases:[]},editing:{format:"Vertical",captionStyle:"",productProminence:"High",soundOffComprehension:"High",pacingAssessment:"Steady"},claimsCheck:[],performanceRead:"No performance figures were supplied.",nextCreativeBrief:{keep:["Product-first opening"],test:[{idea:"Open on a different home exterior",hypothesis:"Setting variety keeps attention",type:"VISUAL"}],avoid:["Historical offers"]}};
     const response={responseId:`fake-dna-${context.operationKey}`,status:"completed" as const,provider:"fake-openai",model:"fake-creative-dna-v1",outputText:JSON.stringify({...draft,winnerReport}),usage:{inputTokens:50,outputTokens:100,totalTokens:150}};this.dnaResponses.set(response.responseId,response);return response;
   }
+  async planWinnerVideos(input: VideoPlanInput, context: ProviderOperationContext): Promise<Readonly<{ plans: readonly unknown[]; submission: ProviderSubmission }>> {
+    this.calls.push(context);
+    const seconds = Math.round(input.targetDurationMs / 1000);
+    const motions = ["ZOOM_IN", "PAN_RIGHT", "ZOOM_OUT", "PAN_LEFT"];
+    const plans = Array.from({ length: input.requestedCount }, (_, i) => ({
+      title: `Variation ${i + 1}`, keepsFromWinner: "Keeps the product visible from the first second.", changes: `Tests hook ${i + 1}.`,
+      hookText: `Hook number ${i + 1}`, voiceover: `This is fake voiceover number ${i + 1} for ${input.product.name}.`, ctaText: "Shop now",
+      scenes: [0, 1, 2].map((s) => ({ photo: input.photos.length ? (s % input.photos.length) + 1 : 1, motion: motions[(i + s) % motions.length], caption: `Caption ${s + 1}`, seconds: seconds / 3 }))
+    }));
+    return { plans, submission: { provider: "fake", model: "fake-video-plans-v1", providerTaskId: `fake-plans-${context.operationKey}`, requestId: `fake-plans-${context.operationKey}`, metadata: { operationKey: context.operationKey } } };
+  }
+
   async retrieveCreativeDnaAnalysis(responseId:string):Promise<StrategyProviderResponse>{this.dnaRetrievals.push(responseId);const response=this.dnaResponses.get(responseId);if(!response)throw new Error("Unknown fake Creative DNA response.");return response;}
 
   async generateVariantPackages(input: VariantPackageGenerationInput, context: ProviderOperationContext): Promise<Readonly<{ packages: readonly VariantCreativePackageDraft[]; submission: ProviderSubmission }>> {

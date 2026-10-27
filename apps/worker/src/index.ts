@@ -1,24 +1,23 @@
-import { OutboxDispatcher, PostgresOutboxStore, createRedisConnection, createWorkflowWorker } from "@koolezt/infrastructure";
-import { Queue } from "bullmq";
 import { createRuntime } from "../../api/src/runtime.js";
 
 const runtime = createRuntime();
-const redisUrl = process.env.REDIS_URL;
-if (!redisUrl) throw new Error("REDIS_URL is required.");
-const connection = createRedisConnection(redisUrl);
-const queue = new Queue("koolezt-workflow", { connection });
-const dispatcher = new OutboxDispatcher(new PostgresOutboxStore(runtime.pool), queue);
-await dispatcher.recover();
-const dispatchTimer = setInterval(() => void dispatcher.dispatchAvailable().catch(console.error), 1_000);
-dispatchTimer.unref();
-// This is deliberately a shared conservative cap: a project can mix providers per scene.
-const workflowProcessor = { processJob: async (jobId: string) => {
-  const job = await runtime.repository.getJob(jobId);
-  return job.type === "ANALYZE_CREATIVE_DNA" ? runtime.creativeDnaService.processJob(jobId) : job.type === "GENERATE_STRATEGY" || job.type === "REPLACE_STRATEGY"
-    ? runtime.strategyService.processJob(jobId)
-    : runtime.service.processJob(jobId);
-} };
-const worker = createWorkflowWorker(connection, workflowProcessor, Number(process.env.VIDEO_WORKER_CONCURRENCY ?? process.env.KLING_MAX_CONCURRENCY ?? process.env.SEEDANCE_MAX_CONCURRENCY ?? "2"));
+
+// One job at a time: winner analysis, plan writing, and video rendering share this single loop,
+// so rendering never runs in parallel with itself on the shared server.
+let jobLoopRunning = false;
+const runJobs = async () => {
+  if (jobLoopRunning) return;
+  jobLoopRunning = true;
+  try {
+    while (await runtime.winnerJobRunner.runOnce()) { /* keep draining due jobs */ }
+  } catch (error) {
+    console.error("winner job loop failed", { errorName: error instanceof Error ? error.name : "UnknownError" });
+  } finally {
+    jobLoopRunning = false;
+  }
+};
+const jobTimer = setInterval(() => void runJobs(), Number(process.env.WINNER_JOB_POLL_MS ?? "3000"));
+
 let cleanupRunning = false;
 const cleanupMedia = async () => {
   if (!runtime.runMediaCleanup || cleanupRunning) return;
@@ -35,6 +34,7 @@ const cleanupMedia = async () => {
 await cleanupMedia();
 const cleanupTimer = setInterval(() => void cleanupMedia(), Number(process.env.MEDIA_CLEANUP_INTERVAL_MS ?? "3600000"));
 cleanupTimer.unref();
+
 // Imported Meta winners get their lifetime results refreshed daily; read-only, no paid AI calls.
 const refreshMetaWinners = async () => {
   if (!runtime.metaWinners) return;
@@ -49,18 +49,17 @@ const metaFirstRun = setTimeout(() => void refreshMetaWinners(), 10 * 60_000);
 metaFirstRun.unref();
 const metaTimer = setInterval(() => void refreshMetaWinners(), Number(process.env.META_REFRESH_INTERVAL_MS ?? "86400000"));
 metaTimer.unref();
-worker.on("failed", (job, error) => console.error("workflow job failed", job?.id, error));
+
 let stopping = false;
 const shutdown = async () => {
   if (stopping) return;
   stopping = true;
-  clearInterval(dispatchTimer);
+  clearInterval(jobTimer);
   clearInterval(cleanupTimer);
   clearTimeout(metaFirstRun);
   clearInterval(metaTimer);
-  await worker.close();
-  await queue.close();
-  await connection.quit();
+  // Let a running job finish its current step before closing the database pool.
+  while (jobLoopRunning) await new Promise((resolve) => setTimeout(resolve, 250));
   await runtime.pool.end();
 };
 process.once("SIGTERM", () => void shutdown());

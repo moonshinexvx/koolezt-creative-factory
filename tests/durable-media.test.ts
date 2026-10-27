@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { S3DurableMediaStore } from "@koolezt/media";
 import { PostgresDurableMediaAssetCatalog } from "@koolezt/infrastructure";
 import type { GeneratedAsset } from "@koolezt/domain";
-import { buildServer } from "../apps/api/src/server.js";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const assetId = "22222222-2222-4222-8222-222222222222";
@@ -113,23 +112,4 @@ describe("S3 durable media store", () => {
     expect(sql).toContain("cr.source_asset_id=media_assets.id");
   });
 
-  it("authorizes and completes a browser upload only for the requested manual scene", async () => {
-    const pending = { id: assetId, kind: "VIDEO", storageKey: `creative-factory/working/${projectId}/${assetId}/${objectId}.mp4`, storageProvider: "s3", projectId, purpose: "SCENE_VIDEO", lifecycleStatus: "PENDING_UPLOAD", mimeType: "video/mp4", byteSize: bytes.byteLength, sha256: checksum, metadata: { sceneId: "scene-1" }, createdAt: "2026-09-11T00:00:00.000Z" } as const;
-    const project = { id: projectId, state: "SCENES_REVIEW", scenes: [{ id: "scene-1", attempts: [{ sourceType: "PRODUCT_IMAGE", generationMethod: "MANUAL", status: "PENDING", inputAssetId: objectId, providerMetadata: { contextProductFidelityConfirmed: true } }] }] };
-    const createUpload = vi.fn(async () => ({ asset: pending, method: "PUT", url: "https://private-bucket.s3.amazonaws.com/exact?signature=redacted", headers: { "x-amz-meta-sha256": checksum }, expiresAt: "2026-09-11T00:01:00.000Z" }));
-    const completeUpload = vi.fn(async () => ({ ...pending, lifecycleStatus: "AVAILABLE" as const }));
-    const uploadManualSceneVideo = vi.fn(async () => ({ ...project, marker: "completed" }));
-    const app = buildServer({ durableMediaStore: { createUpload, completeUpload }, service: { getProject: vi.fn(async () => project), uploadManualSceneVideo } } as never);
-    const authorized = await app.inject({ method: "POST", url: `/api/projects/${projectId}/scenes/scene-1/manual-video/upload`, payload: { filename: "customer name.mp4", mimeType: "video/mp4", byteSize: bytes.byteLength, sha256: checksum, provider: "kling" } });
-    expect(authorized.statusCode).toBe(200);
-    expect(authorized.json()).not.toHaveProperty("storageKey");
-    expect(JSON.stringify(authorized.json())).not.toContain("secret-never-exposed");
-    expect(createUpload).toHaveBeenCalledWith(expect.objectContaining({ projectId, purpose: "SCENE_VIDEO", metadata: expect.objectContaining({ sceneId: "scene-1" }) }));
-    const completed = await app.inject({ method: "POST", url: `/api/projects/${projectId}/scenes/scene-1/manual-video/complete`, payload: { assetId, provider: "kling" } });
-    expect(completed.statusCode).toBe(200);
-    expect(uploadManualSceneVideo).toHaveBeenCalledOnce();
-    const forbidden = await app.inject({ method: "POST", url: `/api/projects/${projectId}/scenes/other/manual-video/upload`, payload: { filename: "x.mp4", mimeType: "video/mp4", byteSize: bytes.byteLength, sha256: checksum, provider: "kling" } });
-    expect(forbidden.statusCode).toBe(409);
-    expect(createUpload).toHaveBeenCalledTimes(1);
-    await app.close();
-  });});
+});

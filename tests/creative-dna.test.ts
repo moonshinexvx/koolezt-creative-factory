@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CreativeDnaService, CreativeFactoryService, CreativeStrategyService, canonicalizeCreativeDna } from "@koolezt/application";
-import { InMemoryCreativeDnaStore, InMemoryCreativeStrategyStore, InMemoryFactoryRepository } from "@koolezt/infrastructure";
+import { InMemoryCreativeDnaStore, InMemoryCreativeStrategyStore, InMemoryFactoryRepository, InMemoryWinnerJobStore } from "@koolezt/infrastructure";
 import { creativeDnaSampleTimestamps, FakeExternalMediaDeliveryProvider, FfmpegCreativeDnaPreprocessor, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, MetadataMediaInspector } from "@koolezt/media";
 import { FakeCompositionProvider, FakeCreativeProvider, FakeVideoGenerationProvider, FakeVoiceProvider } from "@koolezt/providers";
 import { DomainError } from "@koolezt/domain";
@@ -32,14 +32,15 @@ async function harness(provider: CreativeProvider = new FakeCreativeProvider()) 
     mediaInspector: new MetadataMediaInspector(), readyPublisher: new LocalReadyPublisher(join(root, "ready"), storage)
   });
   const strategy = new CreativeStrategyService({ repository, strategies, creativeDna: dna, creativeProvider: provider });
-  const service = new CreativeDnaService({ repository, dna, provider, storage, preprocessor });
+  const jobs = new InMemoryWinnerJobStore();
+  const service = new CreativeDnaService({ repository, dna, jobs, provider, storage, preprocessor });
   const project = await factory.createProjectFromBrief({
     requestId: crypto.randomUUID(), name: "Personalized address sign", creativeTopic: "Distinct advertising",
     productDetails: "A personalized address sign using supplied reference images.",
     verifiedClaims: ["Displays operator-supplied address numbers"], targetDurationSeconds: 15, actor: "editor"
   });
   const asset = await storage.put("history/winner.mp4", { bytes: new Uint8Array([0, 1, 2]), mimeType: "video/mp4", extension: "mp4", metadata: {} });
-  return { root, repository, strategies, dna, storage, factory, strategy, service, provider, videoProvider, voiceProvider, compositionProvider, project, asset, dispose: () => rm(root, { recursive: true, force: true }) };
+  return { root, repository, strategies, dna, jobs, storage, factory, strategy, service, provider, videoProvider, voiceProvider, compositionProvider, project, asset, dispose: () => rm(root, { recursive: true, force: true }) };
 }
 
 async function register(setup: Awaited<ReturnType<typeof harness>>) {
@@ -55,7 +56,8 @@ describe("Winning Creative DNA", () => {
     const setup = await harness();
     try {
       const reference = await setup.service.register({ productId: setup.project.productId, assetId: setup.asset.id, displayName: "Library winner", operatorStatus: "WINNER", actor: "owner", performance: { spend: 120, purchases: 4, revenue: 480, currency: "USD" } });
-      expect(reference).toMatchObject({ sourceProjectId: setup.project.id, productId: setup.project.productId });
+      expect(reference).toMatchObject({ productId: setup.project.productId });
+      expect(reference.sourceProjectId).toBeUndefined();
       const job = await setup.service.requestAnalysis(reference.id, crypto.randomUUID());
       expect((await setup.service.listWinnerReports())[0]).toMatchObject({ status: "PENDING" });
       expect((await setup.service.processJob(job.id)).status).toBe("COMPLETED");
@@ -221,7 +223,7 @@ describe("Winning Creative DNA", () => {
       const completed = await setup.service.processJob(job.id);
       expect(completed.status).toBe("COMPLETED");
       expect(completed.lastError).toBeUndefined();
-      expect((await setup.repository.getJob(job.id)).lastError).toBeUndefined();
+      expect((await setup.jobs.list()).find((item) => item.id === job.id)!.lastError).toBeUndefined();
       expect({ creates, retrieves }).toEqual({ creates: 1, retrieves: 1 });
     } finally { await setup.dispose(); }
   });
@@ -253,7 +255,7 @@ describe("Winning Creative DNA", () => {
       const failed = await setup.service.processJob(job.id);
       expect(failed.status).toBe("FAILED");
       expect(failed.lastError).toContain(expectedError);
-      expect((await setup.repository.getJob(job.id)).lastError).toContain(expectedError);
+      expect((await setup.jobs.list()).find((item) => item.id === job.id)!.lastError).toContain(expectedError);
       expect((await setup.dna.getReference(reference.id)).analysisStatus).toBe(expectedReferenceStatus);
     } finally { await setup.dispose(); }
   });
@@ -274,7 +276,7 @@ describe("Winning Creative DNA", () => {
       const failed = await setup.service.processJob(job.id);
       expect(failed.status).toBe("FAILED");
       expect(failed.lastError).toContain("no longer retrievable");
-      expect((await setup.repository.getJob(job.id)).lastError).toContain("no longer retrievable");
+      expect((await setup.jobs.list()).find((item) => item.id === job.id)!.lastError).toContain("no longer retrievable");
       expect((await setup.dna.getReference(reference.id)).analysisStatus).toBe("RESULT_UNAVAILABLE");
       expect(creates).toBe(1);
     } finally { await setup.dispose(); }

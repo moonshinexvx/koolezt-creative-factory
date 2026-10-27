@@ -1,8 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { DomainError } from "@koolezt/domain";
-import type { ConceptProviderResponse, CreativeConceptProviderDraft, CreativeDnaAnalysisInput, CreativeInputSnapshot, CreativeProvider, ExecutionFeasibilityPlan, NarrationRewriteInput, ProviderOperationContext, ProviderSubmission, StrategyGenerationInput, StrategyProviderResponse, VariantCreativePackageDraft, VariantPackageGenerationInput } from "@koolezt/domain";
+import type { ConceptProviderResponse, CreativeConceptProviderDraft, CreativeDnaAnalysisInput, CreativeInputSnapshot, CreativeProvider, ExecutionFeasibilityPlan, NarrationRewriteInput, ProviderOperationContext, ProviderSubmission, StrategyGenerationInput, StrategyProviderResponse, VariantCreativePackageDraft, VariantPackageGenerationInput, VideoPlanInput } from "@koolezt/domain";
 import { OPENAI_CREATIVE_INSTRUCTIONS as CREATIVE_INSTRUCTIONS, OPENAI_CREATIVE_PROMPT_VERSION as CREATIVE_PROMPT_VERSION, OPENAI_NARRATION_REWRITE_INSTRUCTIONS as NARRATION_REWRITE_INSTRUCTIONS } from "./openai-creative-prompt.js";
-import { backgroundConceptInstructions, conceptInstructions, DNA_ANALYSIS_INSTRUCTIONS, dnaSchema, WINNER_REPORT_SYSTEM, legacyConceptSchema, narrationRewriteSchema, referenceCatalog, strategyExecutionSchemaFor, strategyInstructions, strategyProviderInput, strategySchemaFor, VARIANT_PACKAGE_INSTRUCTIONS, variantPackageSchema } from "./creative-contract.js";
+import { backgroundConceptInstructions, conceptInstructions, DNA_ANALYSIS_INSTRUCTIONS, dnaSchema, VIDEO_PLAN_INSTRUCTIONS, videoPlansSchema, WINNER_REPORT_SYSTEM, legacyConceptSchema, narrationRewriteSchema, referenceCatalog, strategyExecutionSchemaFor, strategyInstructions, strategyProviderInput, strategySchemaFor, VARIANT_PACKAGE_INSTRUCTIONS, variantPackageSchema } from "./creative-contract.js";
 
 export type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
 type JsonSchema = Readonly<Record<string, unknown>>;
@@ -248,6 +248,21 @@ export class ClaudeCreativeProvider implements CreativeProvider {
     const merged: StrategyProviderResponse = { ...dna, outputText: JSON.stringify({ ...(JSON.parse(dna.outputText) as Record<string, unknown>), ...("winnerReport" in extra ? { winnerReport: extra.winnerReport } : { winnerReportError: extra.winnerReportError }) }), ...("usage" in extra && dna.usage ? { usage: { inputTokens: (dna.usage.inputTokens ?? 0) + extra.usage.inputTokens, outputTokens: (dna.usage.outputTokens ?? 0) + extra.usage.outputTokens, totalTokens: (dna.usage.totalTokens ?? 0) + extra.usage.totalTokens } } : {}) };
     this.completed.set(merged.responseId, merged);
     return merged;
+  }
+
+  async planWinnerVideos(input: VideoPlanInput, context: ProviderOperationContext): Promise<Readonly<{ plans: readonly unknown[]; submission: ProviderSubmission }>> {
+    const { photos, ...rest } = input;
+    const images = photos.map((photo): ImageBlock => ({ type: "image", source: { type: "base64", media_type: photo.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: photo.bytesBase64 } }));
+    try {
+      const result = await this.call({
+        system: VIDEO_PLAN_INSTRUCTIONS(input.requestedCount, Math.round(input.targetDurationMs / 1000)),
+        payload: { operationKey: context.operationKey, ...rest, photos: photos.map((photo) => ({ number: photo.index, label: photo.label })) },
+        images, schema: videoPlansSchema, effort: this.backgroundEffort, timeoutMs: this.backgroundTimeoutMs, invalidCode: "CLAUDE_VIDEO_PLANS_INVALID"
+      });
+      return { plans: (JSON.parse(result.outputText) as { plans: unknown[] }).plans, submission: this.submission(result, context, "winner-video-plans/v1") };
+    } catch (error) {
+      this.interactiveFailure(error, "CLAUDE_VIDEO_PLANS_INVALID", "CLAUDE_VIDEO_PLANS_SUBMISSION_UNKNOWN", "video plan");
+    }
   }
 
   async retrieveCreativeDnaAnalysis(responseId: string): Promise<StrategyProviderResponse> {

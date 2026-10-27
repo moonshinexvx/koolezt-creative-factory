@@ -46,6 +46,8 @@ export { CreativeStrategyService, STRATEGY_LIMITS, STRATEGY_REQUESTED_COUNTS, DE
 export { assembleCreativeConcept, bindCanonicalVisualReferences, boundedConceptProviderResult, conceptProviderResultSha256, validateConceptExecution } from "./concept-authority.js";
 export { CreativeDnaService, canonicalizeCreativeDna, selectedWinnerDnaSnapshot } from "./creative-dna.js";
 export { isMetaVideoUrl, MetaWinnerService, performanceFromMeta } from "./meta-winners.js";
+export { canonicalizeVideoPlan, WinnerJobRunner, WinnerVideoService } from "./winner-videos.js";
+export type { JobOutcome, VideoRenderer } from "./winner-videos.js";
 export type { MetaImportResult } from "./meta-winners.js";
 export { assertExecutionFeasible, buildExecutionFeasibilityPlan } from "./execution-feasibility.js";
 

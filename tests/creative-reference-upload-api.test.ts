@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { DomainError } from "@koolezt/domain";
 import { buildServer } from "../apps/api/src/server.js";
 
-const project = { id: "11111111-1111-4111-8111-111111111111", productId: "product-1" };
+const product = { id: "44444444-4444-4444-8444-444444444444", name: "Dog Address Sign" };
 const asset = {
-  id: "22222222-2222-4222-8222-222222222222", projectId: project.id, kind: "VIDEO", purpose: "CREATIVE_REFERENCE",
-  storageKey: "creative-factory/working/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333.mp4",
+  id: "22222222-2222-4222-8222-222222222222", kind: "VIDEO", purpose: "WINNER_SOURCE_VIDEO",
+  storageKey: "creative-factory/working/44444444-4444-4444-8444-444444444444/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333.mp4",
   mimeType: "video/mp4", byteSize: 16, sha256: "a".repeat(64), lifecycleStatus: "AVAILABLE", metadata: { originalFilename: "winner.mp4" }, createdAt: new Date().toISOString()
 };
 
@@ -29,24 +29,23 @@ function runtime(overrides: Record<string,unknown> = {}) {
   const requestAnalysis = vi.fn();
   const deleteAsset = vi.fn(async()=>undefined);
   const list = vi.fn(async ():Promise<unknown[]>=>[]);
-  const listApproved = vi.fn(async ():Promise<unknown[]>=>[]);
-  return {
-    service:{getProject:vi.fn(async()=>project),listProducts:vi.fn(async()=>[{id:project.productId,name:"Dog Address Sign"}])},storage:{put,getAsset:vi.fn(async()=>asset),read:vi.fn(async()=>Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from("ftypisomfixture")]))},
-    creativeDnaService:{register,requestAnalysis,list,listApproved,listWinnerReports:vi.fn(async()=>[]),listMetaLinks:vi.fn(async()=>[]),campaignProjectForProduct:vi.fn(async()=>project)},durableMediaStore:{createUpload,completeUpload,deleteAsset,rejectUpload:vi.fn(async()=>undefined)},
-    renderWorkerIdentities:{list:vi.fn(async()=>[])},...overrides,
-    spies:{put,createUpload,completeUpload,register,requestAnalysis,deleteAsset,list,listApproved}
+    return {
+    service:{getProduct:vi.fn(async()=>product),listProducts:vi.fn(async()=>[product])},storage:{put,getAsset:vi.fn(async()=>asset),read:vi.fn(async()=>Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from("ftypisomfixture")]))},
+    creativeDnaService:{register,requestAnalysis,list,listWinnerReports:vi.fn(async()=>[]),listMetaLinks:vi.fn(async()=>[])},durableMediaStore:{createUpload,completeUpload,deleteAsset,rejectUpload:vi.fn(async()=>undefined)},
+    ...overrides,
+    spies:{put,createUpload,completeUpload,register,requestAnalysis,deleteAsset,list}
   };
 }
 
 describe("Creative Reference source-video upload API",()=>{
   it("authorizes direct durable upload and registers only after verified completion",async()=>{
     const setup=runtime();const app=buildServer(setup as never);
-    const authorization=await app.inject({method:"POST",url:`/api/projects/${project.id}/creative-references/upload`,payload:{filename:"winner.mp4",mimeType:"video/mp4",byteSize:asset.byteSize,sha256:asset.sha256}});
+    const authorization=await app.inject({method:"POST",url:`/api/products/${product.id}/creative-references/upload`,payload:{filename:"winner.mp4",mimeType:"video/mp4",byteSize:asset.byteSize,sha256:asset.sha256}});
     expect(authorization.statusCode).toBe(200);
     expect(authorization.json()).toMatchObject({assetId:asset.id,method:"PUT",url:"https://uploads.example.test/winner"});
-    expect(setup.spies.createUpload).toHaveBeenCalledWith(expect.objectContaining({projectId:project.id,purpose:"CREATIVE_REFERENCE",kind:"VIDEO",originalFilename:"winner.mp4"}));
+    expect(setup.spies.createUpload).toHaveBeenCalledWith(expect.objectContaining({projectId:product.id,purpose:"WINNER_SOURCE_VIDEO",kind:"VIDEO",originalFilename:"winner.mp4"}));
     expect(setup.spies.register).not.toHaveBeenCalled();
-    const completion=await app.inject({method:"POST",url:`/api/projects/${project.id}/creative-references/complete`,payload:{assetId:asset.id,displayName:"Historical winner",operatorStatus:"WINNER",platform:"Meta / Facebook"}});
+    const completion=await app.inject({method:"POST",url:`/api/products/${product.id}/creative-references/complete`,payload:{assetId:asset.id,displayName:"Historical winner",operatorStatus:"WINNER",platform:"Meta / Facebook"}});
     expect(completion.statusCode).toBe(200);
     expect(setup.spies.completeUpload).toHaveBeenCalledWith(asset.id);
     expect(setup.spies.register).toHaveBeenCalledWith(expect.objectContaining({assetId:asset.id,displayName:"Historical winner",operatorStatus:"WINNER"}));
@@ -54,18 +53,13 @@ describe("Creative Reference source-video upload API",()=>{
     await app.close();
   });
 
-  it("files a Product-level winner under that Product's campaign and lists it with its report",async()=>{
+  it("files an uploaded winner under its Product and lists it with its report",async()=>{
     const setup=runtime();const app=buildServer(setup as never);
-    const authorization=await app.inject({method:"POST",url:`/api/products/${project.productId}/creative-references/upload`,payload:{filename:"winner.mp4",mimeType:"video/mp4",byteSize:asset.byteSize,sha256:asset.sha256}});
-    expect(authorization.statusCode).toBe(200);
-    expect(setup.creativeDnaService.campaignProjectForProduct).toHaveBeenCalledWith(project.productId);
-    expect(setup.spies.createUpload).toHaveBeenCalledWith(expect.objectContaining({projectId:project.id,purpose:"CREATIVE_REFERENCE"}));
-    const completion=await app.inject({method:"POST",url:`/api/products/${project.productId}/creative-references/complete`,payload:{assetId:asset.id,displayName:"Library winner",operatorStatus:"WINNER"}});
+    const completion=await app.inject({method:"POST",url:`/api/products/${product.id}/creative-references/complete`,payload:{assetId:asset.id,displayName:"Library winner",operatorStatus:"WINNER"}});
     expect(completion.statusCode).toBe(200);
-    expect(setup.spies.register).toHaveBeenCalledWith(expect.objectContaining({projectId:project.id,assetId:asset.id}));
-    const report={creativeReferenceId:"reference-1",status:"READY",providerMetadata:{},createdAt:"t",updatedAt:"t"};
-    setup.creativeDnaService.list=vi.fn(async()=>[{reference:{id:"reference-1",sourceAssetId:asset.id,productId:project.productId},revisions:[]}]);
-    setup.creativeDnaService.listWinnerReports=vi.fn(async()=>[report]) as never;
+    expect(setup.spies.register).toHaveBeenCalledWith(expect.objectContaining({productId:product.id,assetId:asset.id}));
+    setup.creativeDnaService.list=vi.fn(async()=>[{reference:{id:"reference-1",sourceAssetId:asset.id,productId:product.id},revisions:[]}]);
+    setup.creativeDnaService.listWinnerReports=vi.fn(async()=>[{creativeReferenceId:"reference-1",status:"READY",providerMetadata:{},createdAt:"t",updatedAt:"t"}]) as never;
     const listed=await app.inject({method:"GET",url:"/api/creative-references"});
     expect(listed.json()[0]).toMatchObject({productName:"Dog Address Sign",winnerReport:{status:"READY"}});
     await app.close();
@@ -83,7 +77,7 @@ describe("Creative Reference source-video upload API",()=>{
   it("links a manually uploaded winner to its Meta ad after registration",async()=>{
     const linkUploaded=vi.fn(async()=>undefined);
     const setup=runtime({metaWinners:{linkUploaded}});const app=buildServer(setup as never);
-    const completion=await app.inject({method:"POST",url:`/api/products/${project.productId}/creative-references/complete`,payload:{assetId:asset.id,displayName:"Meta winner",operatorStatus:"WINNER",metaAccountId:"123456",metaAdId:"120200000000000001"}});
+    const completion=await app.inject({method:"POST",url:`/api/products/${product.id}/creative-references/complete`,payload:{assetId:asset.id,displayName:"Meta winner",operatorStatus:"WINNER",metaAccountId:"123456",metaAdId:"120200000000000001"}});
     expect(completion.statusCode).toBe(200);
     expect(setup.spies.register).toHaveBeenCalledWith(expect.not.objectContaining({metaAdId:expect.anything()}));
     expect(linkUploaded).toHaveBeenCalledWith("reference-1","act_123456","120200000000000001");
@@ -110,7 +104,7 @@ describe("Creative Reference source-video upload API",()=>{
 
   it("rejects unsupported direct uploads before creating a durable asset",async()=>{
     const setup=runtime();const app=buildServer(setup as never);
-    const response=await app.inject({method:"POST",url:`/api/projects/${project.id}/creative-references/upload`,payload:{filename:"winner.mov",mimeType:"video/mp4",byteSize:asset.byteSize,sha256:asset.sha256}});
+    const response=await app.inject({method:"POST",url:`/api/products/${product.id}/creative-references/upload`,payload:{filename:"winner.mov",mimeType:"video/mp4",byteSize:asset.byteSize,sha256:asset.sha256}});
     expect(response.statusCode).toBe(409);
     expect(response.json().error).toBe("UNSUPPORTED_MEDIA_TYPE");
     expect(setup.spies.createUpload).not.toHaveBeenCalled();
@@ -121,18 +115,18 @@ describe("Creative Reference source-video upload API",()=>{
     const setup=runtime();
     setup.creativeDnaService.register=vi.fn(async()=>{throw new DomainError("CREATIVE_REFERENCE_WRITE_FAILED","Reference write failed.");});
     const app=buildServer(setup as never);
-    const response=await app.inject({method:"POST",url:`/api/projects/${project.id}/creative-references/complete`,payload:{assetId:asset.id,displayName:"Historical winner",operatorStatus:"WINNER"}});
+    const response=await app.inject({method:"POST",url:`/api/products/${product.id}/creative-references/complete`,payload:{assetId:asset.id,displayName:"Historical winner",operatorStatus:"WINNER"}});
     expect(response.statusCode).toBe(409);
     expect(setup.spies.deleteAsset).toHaveBeenCalledWith(asset.id);
     expect(setup.spies.requestAnalysis).not.toHaveBeenCalled();
     await app.close();
   });
 
-  it("never deletes a durable asset that is outside the current project scope",async()=>{
+  it("never deletes a durable asset that belongs to another product",async()=>{
     const setup=runtime();
-    setup.durableMediaStore.completeUpload=vi.fn(async()=>({...asset,projectId:"99999999-9999-4999-8999-999999999999"}));
+    setup.durableMediaStore.completeUpload=vi.fn(async()=>({...asset,storageKey:asset.storageKey.replace(product.id,"99999999-9999-4999-8999-999999999999")}));
     const app=buildServer(setup as never);
-    const response=await app.inject({method:"POST",url:`/api/projects/${project.id}/creative-references/complete`,payload:{assetId:asset.id,displayName:"Historical winner",operatorStatus:"WINNER"}});
+    const response=await app.inject({method:"POST",url:`/api/products/${product.id}/creative-references/complete`,payload:{assetId:asset.id,displayName:"Historical winner",operatorStatus:"WINNER"}});
     expect(response.statusCode).toBe(409);
     expect(response.json().error).toBe("DURABLE_MEDIA_SCOPE_MISMATCH");
     expect(setup.spies.deleteAsset).not.toHaveBeenCalled();
@@ -144,9 +138,9 @@ describe("Creative Reference source-video upload API",()=>{
     ["winner.webm","video/webm",Buffer.from([0x1a,0x45,0xdf,0xa3,0,0,0,0])]
   ])("accepts and links %s without starting DNA analysis",async(filename,mimeType,bytes)=>{
     const setup=runtime();const app=buildServer(setup as never);
-    const response=await app.inject({method:"POST",url:`/api/projects/${project.id}/creative-references`,...multipart(filename,mimeType,bytes)});
+    const response=await app.inject({method:"POST",url:`/api/products/${product.id}/creative-references`,...multipart(filename,mimeType,bytes)});
     expect(response.statusCode).toBe(200);
-    expect(setup.spies.put).toHaveBeenCalledWith(expect.stringContaining("/creative-references/"),expect.objectContaining({mimeType,metadata:expect.objectContaining({purpose:"CREATIVE_REFERENCE",originalFilename:filename})}));
+    expect(setup.spies.put).toHaveBeenCalledWith(expect.stringContaining(`products/${product.id}/winners/`),expect.objectContaining({mimeType,metadata:expect.objectContaining({purpose:"WINNER_SOURCE_VIDEO",originalFilename:filename})}));
     expect(setup.spies.register).toHaveBeenCalledWith(expect.objectContaining({assetId:asset.id,operatorStatus:"WINNER"}));
     expect(setup.spies.requestAnalysis).not.toHaveBeenCalled();
     await app.close();
@@ -154,8 +148,8 @@ describe("Creative Reference source-video upload API",()=>{
 
   it("rejects a missing source file and an unsupported extension before durable storage",async()=>{
     const setup=runtime();const app=buildServer(setup as never);
-    const missing=await app.inject({method:"POST",url:`/api/projects/${project.id}/creative-references`,...multipart()});
-    const unsupported=await app.inject({method:"POST",url:`/api/projects/${project.id}/creative-references`,...multipart("winner.mov")});
+    const missing=await app.inject({method:"POST",url:`/api/products/${product.id}/creative-references`,...multipart()});
+    const unsupported=await app.inject({method:"POST",url:`/api/products/${product.id}/creative-references`,...multipart("winner.mov")});
     expect(missing.statusCode).toBe(409);
     expect(missing.json().error).toBe("UPLOAD_REQUIRED");
     expect(unsupported.statusCode).toBe(409);
@@ -169,7 +163,7 @@ describe("Creative Reference source-video upload API",()=>{
     const setup=runtime();
     setup.creativeDnaService.register=vi.fn(async()=>{throw new DomainError("CREATIVE_REFERENCE_WRITE_FAILED","Reference write failed.");});
     const app=buildServer(setup as never);
-    const response=await app.inject({method:"POST",url:`/api/projects/${project.id}/creative-references`,...multipart("winner.mp4")});
+    const response=await app.inject({method:"POST",url:`/api/products/${product.id}/creative-references`,...multipart("winner.mp4")});
     expect(response.statusCode).toBe(409);
     expect(setup.spies.put).toHaveBeenCalledOnce();
     expect(setup.spies.deleteAsset).toHaveBeenCalledWith(asset.id);
@@ -187,15 +181,4 @@ describe("Creative Reference source-video upload API",()=>{
     await app.close();
   });
 
-  it("scopes Creative References to the Campaign and shares approved Winner DNA across its Product",async()=>{
-    const setup=runtime();const app=buildServer(setup as never);
-    const references=await app.inject({method:"GET",url:`/api/creative-references?projectId=${project.id}`});
-    const approved=await app.inject({method:"GET",url:`/api/creative-references/approved?projectId=${project.id}`});
-    expect(references.statusCode).toBe(200);
-    expect(approved.statusCode).toBe(200);
-    expect(setup.spies.list).toHaveBeenCalledWith(project.id);
-    expect(setup.spies.listApproved).toHaveBeenCalledWith(project.productId);
-    expect(setup.service.getProject).toHaveBeenCalledWith(project.id);
-    await app.close();
-  });
 });

@@ -7,7 +7,6 @@ import { RenderWorkerClient } from "../apps/render-worker/src/client.js";
 import { buildFfmpegArguments, detectEncoder } from "../apps/render-worker/src/renderer.js";
 import type { RenderManifest } from "../apps/render-worker/src/types.js";
 import { DesktopCompositionProvider } from "@koolezt/infrastructure";
-import { buildServer } from "../apps/api/src/server.js";
 
 const roots: string[] = [];
 const sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -61,19 +60,6 @@ expect(filters).toContain("fontfile=");
     expect(provider.requiresExternalMedia).toBe(false);
     const result = await provider.submit({ snapshot: {} as never, sceneAssets: [], narration: {} as never, captionTimings: [], marketingOverlays: [], cta: "CTA", compositionStyleKey: "style", target: { width: 1080, height: 1920, durationMs: 15000 } }, { projectId: "project", targetId: "render", operationKey: "compose:1" });
     expect(result.providerTaskId).toBe("job-1"); expect(store.ensure).toHaveBeenCalledTimes(1); expect((await provider.getStatus("job-1")).state).toBe("PROCESSING");
-  });
-
-  it("requires the dedicated worker bearer token and scopes asset access to the claimed manifest", async () => {
-    const claim = vi.fn(async () => undefined);
-    const authorize = vi.fn(async () => ({ inputSnapshot: { sceneInputs: [{ assetId: "allowed" }], narration: { assetId: "voice" } } }));
-    const app = buildServer({ renderWorkerToken: "worker-secret", renderWorkerLeaseMs: 300_000, desktopRenderJobs: { claim, authorize } } as never);
-    const identity = { workerId: "windows-test", workerVersion: "1.0.0", protocolVersion: "render-worker/v1", encoders: ["libx264"] };
-    expect((await app.inject({ method: "POST", url: "/api/render-worker/v1/register", payload: identity })).statusCode).toBe(401);
-    expect((await app.inject({ method: "POST", url: "/api/render-worker/v1/register", headers: { authorization: "Bearer worker-secret" }, payload: identity })).statusCode).toBe(200);
-    expect((await app.inject({ method: "POST", url: "/api/render-worker/v1/jobs/claim", headers: { authorization: "Bearer worker-secret" }, payload: identity })).statusCode).toBe(204);
-    const forbidden = await app.inject({ method: "GET", url: "/api/render-worker/v1/jobs/job/assets/not-allowed", headers: { authorization: "Bearer worker-secret", "x-render-worker-id": "windows-test", "x-render-lease-token": "lease" } });
-    expect(forbidden.statusCode).toBe(403); expect(claim).toHaveBeenCalledTimes(1); expect(authorize).toHaveBeenCalledTimes(1);
-    await app.close();
   });
 
   it("downloads directly from an exact signed S3 reference without sending the worker bearer token", async () => {

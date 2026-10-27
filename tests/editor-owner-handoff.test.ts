@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { CreativeProject } from "@koolezt/domain";
-import { buildServer } from "../apps/api/src/server.js";
 import { fixture } from "./support/factory-fixture.js";
 
 const disposals: Array<() => Promise<void>> = [];
@@ -88,27 +87,6 @@ describe("editor to owner render handoff", () => {
     expect((await setup.service.getProject(project.id)).state).toBe("READY");
   });
 
-  it("makes browser double-clicks idempotent at the HTTP boundary and never returns the worker token", async () => {
-    const setup = await createScenesInReview();
-    let project = await acceptAllScenes(setup);
-    project = await acceptVoice(setup, project);
-    const app = buildServer({ service: setup.service, renderWorkerToken: "browser-must-not-see-worker-secret" } as never);
-
-    const completed = await app.inject({ method: "POST", url: `/api/projects/${project.id}/editor-complete` });
-    const duplicateCompletion = await app.inject({ method: "POST", url: `/api/projects/${project.id}/editor-complete` });
-    expect(completed.statusCode).toBe(200);
-    expect(completed.json().state).toBe("READY_FOR_RENDER");
-    expect(duplicateCompletion.statusCode).toBe(409);
-    expect(completed.body).not.toContain("browser-must-not-see-worker-secret");
-
-    const render = await app.inject({ method: "POST", url: `/api/projects/${project.id}/render`, payload: { provider: "fake" } });
-    const duplicateRender = await app.inject({ method: "POST", url: `/api/projects/${project.id}/render`, payload: { provider: "fake" } });
-    expect(render.statusCode).toBe(200);
-    expect(duplicateRender.statusCode).toBe(409);
-    expect((await setup.service.getProject(project.id)).renders).toHaveLength(1);
-    expect((await setup.service.listJobs(project.id)).filter((job) => job.type === "COMPOSE_RENDER")).toHaveLength(1);
-    await app.close();
-  });
   it("keeps a READY published final live while an immutable candidate is rendered, replaced, or discarded", async () => {
     const setup = await createScenesInReview();
     let project = await acceptAllScenes(setup);

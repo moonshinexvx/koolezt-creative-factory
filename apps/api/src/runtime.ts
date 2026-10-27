@@ -1,9 +1,9 @@
 import { resolve } from "node:path";
-import { CompositionProviderRegistry, CreativeDnaService, CreativeFactoryService, CreativeStrategyService, isMetaVideoUrl, MetaWinnerService, VideoProviderRegistry } from "@koolezt/application";
+import { CompositionProviderRegistry, CreativeDnaService, CreativeFactoryService, CreativeStrategyService, isMetaVideoUrl, MetaWinnerService, VideoProviderRegistry, WinnerJobRunner, WinnerVideoService } from "@koolezt/application";
 import { DomainError } from "@koolezt/domain";
-import { DesktopCompositionProvider, PostgresCreativeDnaStore, PostgresCreativeStrategyStore, PostgresDesktopRenderJobStore, PostgresDurableMediaAssetCatalog, PostgresExternalMediaStagingStore, PostgresFactoryRepository, PostgresMediaAssetCatalog, PostgresRenderWorkerIdentityStore, PostgresProjectArchiveStore, PostgresVariantCreativePackageStore, PostgresVariantFactoryStore, createPostgresPool } from "@koolezt/infrastructure";
+import { DesktopCompositionProvider, PostgresCreativeDnaStore, PostgresWinnerJobStore, PostgresWinnerVideoStore, PostgresCreativeStrategyStore, PostgresDesktopRenderJobStore, PostgresDurableMediaAssetCatalog, PostgresExternalMediaStagingStore, PostgresFactoryRepository, PostgresMediaAssetCatalog, PostgresRenderWorkerIdentityStore, PostgresProjectArchiveStore, PostgresVariantCreativePackageStore, PostgresVariantFactoryStore, createPostgresPool } from "@koolezt/infrastructure";
 import { CloudflareAccessVerifier } from "./browser-auth.js";
-import { DurableReadyPublisher, FakeExternalMediaDeliveryProvider, FfmpegCreativeDnaPreprocessor, FfprobeMediaInspector, HybridDurableMediaStore, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, S3DurableMediaStore, S3ExternalMediaDeliveryProvider, StorageBackedMediaInspector } from "@koolezt/media";
+import { PlanVideoRenderer, DurableReadyPublisher, FakeExternalMediaDeliveryProvider, FfmpegCreativeDnaPreprocessor, FfprobeMediaInspector, HybridDurableMediaStore, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, S3DurableMediaStore, S3ExternalMediaDeliveryProvider, StorageBackedMediaInspector } from "@koolezt/media";
 import { ClaudeCreativeProvider, CreatomateCompositionProvider, HttpMetaAdsGateway, OpenAIAudioTranscriber, CreatomateOutputIngestor, ElevenLabsVoiceProvider, FakeCompositionProvider, FakeCreativeProvider, FakeVideoGenerationProvider, FakeVoiceProvider, HttpCreatomateTransport, HttpKlingTransport, HttpSeedanceTransport, KlingOutputIngestor, KlingVideoGenerationProvider, OpenAICreativeProvider, OpenAIVoiceProvider, OPENAI_VOICE_DEFAULT_STYLE, RoutedVideoOutputIngestor, SeedanceOutputIngestor, SeedanceVideoGenerationProvider, UnavailableCompositionProvider, UnavailableVideoGenerationProvider } from "@koolezt/providers";
 import type { ClaudeEffort } from "@koolezt/providers";
 
@@ -142,7 +142,9 @@ export function createRuntime(env = process.env) {
   const dnaTranscriber = dnaTranscriptionProvider === "openai" ? new OpenAIAudioTranscriber({ apiKey: env.OPENAI_API_KEY ?? "", model: env.OPENAI_TRANSCRIBE_MODEL ?? "whisper-1" }) : undefined;
   const creativeDnaMaxFrames = Number(env.CREATIVE_DNA_MAX_FRAMES ?? "30");
   if (!Number.isInteger(creativeDnaMaxFrames) || creativeDnaMaxFrames < 12 || creativeDnaMaxFrames > 60) throw new Error("CREATIVE_DNA_MAX_FRAMES must be an integer between 12 and 60.");
-  const creativeDnaService = new CreativeDnaService({ repository, dna:creativeDna, provider:creativeProvider, storage, preprocessor:new FfmpegCreativeDnaPreprocessor(storage,env.FFMPEG_PATH??"ffmpeg",env.FFPROBE_PATH??"ffprobe",{maxFrames:creativeDnaMaxFrames,...(dnaTranscriber?{transcriber:dnaTranscriber}:{})}) });
+  const winnerJobs = new PostgresWinnerJobStore(pool);
+  const winnerVideoStore = new PostgresWinnerVideoStore(pool);
+  const creativeDnaService = new CreativeDnaService({ repository, dna:creativeDna, jobs:winnerJobs, provider:creativeProvider, storage, preprocessor:new FfmpegCreativeDnaPreprocessor(storage,env.FFMPEG_PATH??"ffmpeg",env.FFPROBE_PATH??"ffprobe",{maxFrames:creativeDnaMaxFrames,...(dnaTranscriber?{transcriber:dnaTranscriber}:{})}) });
   // Meta Ads is read-only and enabled only when its own token and ad accounts are configured.
   const metaVideoMaxBytes = Number(env.META_VIDEO_MAX_BYTES ?? 500 * 1024 * 1024);
   const downloadMetaVideo = async (url: string) => {
@@ -165,8 +167,17 @@ export function createRuntime(env = process.env) {
   const metaWinners = env.META_ADS_ACCESS_TOKEN && env.META_AD_ACCOUNT_IDS
     ? new MetaWinnerService({ gateway: new HttpMetaAdsGateway({ accessToken: env.META_ADS_ACCESS_TOKEN, accountIds: env.META_AD_ACCOUNT_IDS.split(","), apiVersion: env.META_GRAPH_API_VERSION ?? "v24.0" }), dna: creativeDnaService, repository: creativeDna, storage, downloadVideo: downloadMetaVideo })
     : undefined;
+  // Videos are voiced with the configured voice and rendered on this server at the lowest priority, two threads at most.
+  const winnerVideos = new WinnerVideoService({ repository, dna: creativeDna, videos: winnerVideoStore, jobs: winnerJobs, provider: creativeProvider, voice: voiceProvider, storage,
+    renderer: new PlanVideoRenderer({ ffmpegPath: env.FFMPEG_PATH ?? "ffmpeg", ffprobePath: env.FFPROBE_PATH ?? "ffprobe", threads: Number(env.VIDEO_RENDER_THREADS ?? "2") }),
+    voiceProfileId: env.OPENAI_VOICE_NAME ?? "marin", maxLoadAverage: Number(env.VIDEO_RENDER_MAX_LOAD ?? "2.5") });
+  const winnerJobRunner = new WinnerJobRunner({ jobs: winnerJobs, handlers: { ANALYZE_WINNER: (job) => creativeDnaService.runJob(job), WRITE_VIDEO_PLANS: (job) => winnerVideos.writePlans(job), RENDER_VIDEO: (job) => winnerVideos.renderVideo(job) } });
   return {
     metaWinners,
+    winnerJobs,
+    winnerVideoStore,
+    winnerVideos,
+    winnerJobRunner,
     pool,
     repository,
     creativeProvider,

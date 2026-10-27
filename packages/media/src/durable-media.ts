@@ -75,6 +75,9 @@ function isNotFound(error: unknown): boolean {
   return status === 404 || name === "NotFound" || name === "NoSuchKey";
 }
 
+/** Media owned by a Product rather than a project; the product id is used only in the storage path. */
+export const PRODUCT_SCOPED_PURPOSES: ReadonlySet<string> = new Set(["PRODUCT_ASSET", "WINNER_SOURCE_VIDEO", "WINNER_VIDEO"]);
+
 export class S3DurableMediaStore implements DurableMediaStore {
   readonly providerKey = "s3";
   private readonly client: S3Client;
@@ -111,7 +114,7 @@ export class S3DurableMediaStore implements DurableMediaStore {
       storageKey: key,
       storageProvider: "s3",
       storageBucket: this.config.bucket,
-      ...(input.purpose === "PRODUCT_ASSET" ? {} : { projectId: input.projectId }),
+      ...(PRODUCT_SCOPED_PURPOSES.has(input.purpose) ? {} : { projectId: input.projectId }),
       purpose: input.purpose,
       lifecycleStatus: "PENDING_UPLOAD",
       mimeType: input.mimeType,
