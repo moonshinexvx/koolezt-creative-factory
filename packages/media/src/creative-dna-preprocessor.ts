@@ -118,20 +118,31 @@ export class FfmpegCreativeDnaPreprocessor implements CreativeDnaPreprocessor {
       const frameRate = numerator && denominator ? numerator / denominator : undefined;
       const hasAudio = Boolean(probe.streams?.some((s: any) => s.codec_type === "audio"));
       const mediaMetadata = { durationMs, width: Number(video.width), height: Number(video.height), ...(frameRate && Number.isFinite(frameRate) ? { frameRate } : {}), hasAudio, mimeType: asset.mimeType };
+      // The container can outlast the picture (a longer audio track), so frames are sampled within the video stream.
+      const videoStreamMs = Math.round(Number(video.duration) * 1000);
+      const pictureMs = Number.isFinite(videoStreamMs) && videoStreamMs > 0 ? Math.min(durationMs, videoStreamMs) : durationMs;
       const sceneCutsMs = await this.detectSceneCuts(input, durationMs);
       const frames: CreativeDnaFrame[] = [];
-      for (const timestampMs of creativeDnaSampleTimestamps(durationMs, this.options.maxFrames ?? MAX_CREATIVE_DNA_FRAMES, sceneCutsMs)) {
-        const output = join(root, `frame-${timestampMs}.jpg`);
-        await run(this.ffmpegPath, ["-hide_banner", "-loglevel", "error", "-ss", (timestampMs / 1000).toFixed(3), "-i", input, "-frames:v", "1", "-vf", "scale='min(768,iw)':-2", "-q:v", "3", "-y", output]);
-        const bytes = await readFile(output);
-        frames.push({ timestampMs, mimeType: "image/jpeg", bytesBase64: bytes.toString("base64"), sha256: createHash("sha256").update(bytes).digest("hex") });
+      for (const timestampMs of creativeDnaSampleTimestamps(pictureMs, this.options.maxFrames ?? MAX_CREATIVE_DNA_FRAMES, sceneCutsMs)) {
+        const frame = await this.extractFrame(root, input, timestampMs) ?? (timestampMs > 500 ? await this.extractFrame(root, input, timestampMs - 500) : undefined);
+        if (frame && !frames.some((existing) => existing.timestampMs === frame.timestampMs)) frames.push(frame);
       }
+      if (!frames.length) throw new DomainError("CREATIVE_DNA_MEDIA_INVALID", "No frames could be extracted from this video.");
       const audioTranscript = await this.transcribe(root, input, durationMs, hasAudio);
       const audioLevels = hasAudio ? await this.measureAudioLevels(input, durationMs) : undefined;
       return { mediaMetadata, frames, pacing: creativeDnaPacing(durationMs, sceneCutsMs), audioTranscript, ...(audioLevels ? { audioLevels } : {}) };
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  }
+
+  /** FFmpeg exits successfully but writes nothing when a timestamp falls after the last decodable frame. */
+  private async extractFrame(root: string, input: string, timestampMs: number): Promise<CreativeDnaFrame | undefined> {
+    const output = join(root, `frame-${timestampMs}.jpg`);
+    await run(this.ffmpegPath, ["-hide_banner", "-loglevel", "error", "-ss", (timestampMs / 1000).toFixed(3), "-i", input, "-frames:v", "1", "-vf", "scale='min(768,iw)':-2", "-q:v", "3", "-y", output]);
+    const bytes = await readFile(output).catch(() => undefined);
+    if (!bytes?.byteLength) return undefined;
+    return { timestampMs, mimeType: "image/jpeg", bytesBase64: bytes.toString("base64"), sha256: createHash("sha256").update(bytes).digest("hex") };
   }
 
   private async detectSceneCuts(input: string, durationMs: number): Promise<readonly number[]> {

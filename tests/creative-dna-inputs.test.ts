@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -68,6 +69,26 @@ describe("Creative DNA audio transcription", () => {
       expect(result.frames.length).toBeLessThanOrEqual(16);
       const failing: CreativeDnaTranscriber = { async transcribe() { throw new Error("upstream 503"); } };
       expect((await new FfmpegCreativeDnaPreprocessor(storage, ffmpeg, ffprobe, { transcriber: failing }).preprocess(asset)).audioTranscript).toEqual({ status: "FAILED", reason: "upstream 503" });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }, 60_000);
+});
+
+describe("Creative DNA frame extraction", () => {
+  it("samples within the video stream when the audio track runs longer than the picture", async () => {
+    const root = await mkdtemp(join(tmpdir(), "creative-dna-long-audio-"));
+    try {
+      const architecture = process.arch === "ia32" ? "ia32" : process.arch === "arm64" ? "arm64" : "x64";
+      const ffmpeg = resolve(`node_modules/ffmpeg-static/ffmpeg${process.platform === "win32" ? ".exe" : ""}`);
+      const ffprobe = resolve(`node_modules/ffprobe-static/bin/${process.platform}/${architecture}/ffprobe${process.platform === "win32" ? ".exe" : ""}`);
+      const clip = join(root, "long-audio.mp4");
+      // 3s of picture with 4s of audio: the container duration is longer than the video stream.
+      execFileSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=320x568:r=25:d=3", "-f", "lavfi", "-i", "sine=frequency=440:duration=4", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-y", clip]);
+      const storage = new LocalStorageProvider(join(root, "media"));
+      const asset = await storage.put("history/long-audio.mp4", { bytes: await readFile(clip), mimeType: "video/mp4", extension: "mp4", metadata: {} });
+      const result = await new FfmpegCreativeDnaPreprocessor(storage, ffmpeg, ffprobe).preprocess(asset);
+      expect(result.mediaMetadata.durationMs).toBeGreaterThan(3_500);
+      expect(result.frames.length).toBeGreaterThan(5);
+      expect(Math.max(...result.frames.map((frame) => frame.timestampMs))).toBeLessThan(3_000);
     } finally { await rm(root, { recursive: true, force: true }); }
   }, 60_000);
 });
