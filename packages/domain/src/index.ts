@@ -249,7 +249,31 @@ export type CreativeDnaStatus = "NOT_ANALYZED" | "ANALYZING" | "DRAFT" | "APPROV
 export type CreativeDnaEvidenceKind = "VISUAL_FRAME" | "MEDIA_METADATA" | "VISIBLE_TEXT" | "OPERATOR_TRANSCRIPT" | "OPERATOR_NOTE" | "AUDIO_TRANSCRIPT" | "SCENE_CUT";
 export type CreativeDnaEvidence = Readonly<{ kind: CreativeDnaEvidenceKind; observation: string; timestampMs?: number; endTimestampMs?: number; frameSha256?: string }>;
 export type CreativeDnaMediaMetadata = Readonly<{ durationMs: number; width: number; height: number; frameRate?: number; hasAudio: boolean; mimeType: string }>;
-export type CreativePerformanceContext = Readonly<{ spend?: number; purchases?: number; purchaseCpa?: number; revenue?: number; roas?: number; linkCtr?: number; cpc?: number; cpm?: number; currency?: string; dateStart?: string; dateEnd?: string; metricSource?: string }>;
+export type CreativePerformanceContext = Readonly<{ spend?: number; purchases?: number; purchaseCpa?: number; revenue?: number; roas?: number; linkCtr?: number; cpc?: number; cpm?: number; currency?: string; dateStart?: string; dateEnd?: string; metricSource?: string;
+  impressions?: number; linkClicks?: number; threeSecondViews?: number; thruPlays?: number; hookRate?: number; holdRate?: number; videoCompletion?: Readonly<{ p25?: number; p50?: number; p75?: number; p100?: number }> }>;
+/** Normalized ad-level results from the Meta Marketing API. Rates are fractions (0.25 = 25%). */
+export type MetaAdMetrics = Readonly<{
+  spend: number; impressions: number; linkClicks: number; purchases: number; purchaseValue: number;
+  threeSecondViews?: number; thruPlays?: number; videoP25?: number; videoP50?: number; videoP75?: number; videoP100?: number;
+  linkCtr?: number; cpc?: number; cpm?: number; cpa?: number; roas?: number; hookRate?: number; holdRate?: number;
+}>;
+export type MetaAdAccount = Readonly<{ id: string; name: string; currency?: string }>;
+export type MetaAdSummary = Readonly<{ accountId: string; adId: string; adName: string; campaignName?: string; adsetName?: string; currency?: string; dateStart: string; dateEnd: string; metrics: MetaAdMetrics }>;
+export type MetaAdCreative = Readonly<{ adId: string; adName: string; creativeId?: string; videoId?: string; thumbnailUrl?: string }>;
+/** Read-only Meta Marketing API access; it never creates or edits ads. */
+export interface MetaAdsGateway {
+  readonly accountIds: readonly string[];
+  listAccounts(): Promise<readonly MetaAdAccount[]>;
+  topAds(accountId: string, since: string, until: string): Promise<readonly MetaAdSummary[]>;
+  adCreative(adId: string): Promise<MetaAdCreative>;
+  /** A temporary download URL for the ad's video, or undefined when the token cannot read it. */
+  videoSourceUrl(videoId: string): Promise<string | undefined>;
+  lifetimeResults(accountId: string, adId: string): Promise<MetaAdSummary | undefined>;
+}
+export type CreativeMetaLink = Readonly<{
+  creativeReferenceId: string; accountId: string; adId: string; adName: string; creativeId?: string; videoId?: string; thumbnailUrl?: string;
+  currency?: string; metrics?: MetaAdMetrics; dateStart?: string; dateEnd?: string; syncedAt?: string; syncError?: string; createdAt: string; updatedAt: string;
+}>;
 export type CreativeReference = Readonly<{
   id: string; displayName: string; sourceProjectId: string; productId?: string; sourceAssetId: string; operatorStatus: CreativeReferenceOperatorStatus;
   operatorNotes?: string; operatorTranscript?: string; dateStart?: string; dateEnd?: string; platform?: string;
@@ -278,10 +302,47 @@ export type CreativeDnaTranscription = Readonly<{ provider: string; model: strin
 export type CreativeDnaAudioTranscript =
   | (CreativeDnaTranscription & Readonly<{ status: "TRANSCRIBED" }>)
   | Readonly<{ status: "NO_AUDIO" | "DISABLED" | "FAILED"; reason?: string }>;
-export type CreativeDnaPreprocessed = Readonly<{ mediaMetadata: CreativeDnaMediaMetadata; frames: readonly CreativeDnaFrame[]; pacing?: CreativeDnaPacing; audioTranscript?: CreativeDnaAudioTranscript }>;
+/** FFmpeg loudness and silence measurement of the whole audio track. */
+export type CreativeDnaAudioLevels = Readonly<{ integratedLufs?: number; audioPresentRatio: number }>;
+export type CreativeDnaPreprocessed = Readonly<{ mediaMetadata: CreativeDnaMediaMetadata; frames: readonly CreativeDnaFrame[]; pacing?: CreativeDnaPacing; audioTranscript?: CreativeDnaAudioTranscript; audioLevels?: CreativeDnaAudioLevels }>;
+
+export const WINNER_HOOK_TYPES = ["PATTERN_INTERRUPT", "PRODUCT_REVEAL", "PROBLEM_CALLOUT", "QUESTION", "DEMONSTRATION", "SOCIAL_PROOF", "OFFER", "STORY", "CURIOSITY", "IDENTITY", "OTHER"] as const;
+export const WINNER_AWARENESS_LEVELS = ["UNAWARE", "PROBLEM_AWARE", "SOLUTION_AWARE", "PRODUCT_AWARE", "MOST_AWARE"] as const;
+export const WINNER_BEATS = ["HOOK", "PROBLEM", "PRODUCT_REVEAL", "DEMONSTRATION", "PERSONALIZATION", "PROOF", "OFFER", "CTA", "OTHER"] as const;
+export const WINNER_TEST_TYPES = ["HOOK", "ANGLE", "FORMAT", "OFFER_FRAMING", "VISUAL", "CTA"] as const;
+export const WINNER_EVIDENCE_SOURCES = ["FRAME", "TRANSCRIPT", "SCENE_CUT", "ON_SCREEN_TEXT", "PERFORMANCE", "OPERATOR_NOTE"] as const;
+export const WINNER_CLAIM_STATUSES = ["MATCHES_CURRENT_PRODUCT", "NOT_IN_CURRENT_PRODUCT", "HISTORICAL_OFFER"] as const;
+export type WinnerConfidence = "HIGH" | "MEDIUM" | "LOW";
+export type WinnerEvidence = Readonly<{ source: (typeof WINNER_EVIDENCE_SOURCES)[number]; detail: string; timestampMs?: number; endTimestampMs?: number }>;
+/** Human-facing explanation of a historical winner. Reasons are evidence-backed hypotheses, not proven causes. */
+export type WinnerReport = Readonly<{
+  verdict: Readonly<{ summary: string; reasons: readonly Readonly<{ title: string; explanation: string; confidence: WinnerConfidence; evidence: readonly WinnerEvidence[] }>[] }>;
+  hook: Readonly<{ visualHook: string; textHook: string; spokenHook: string; hookType: (typeof WINNER_HOOK_TYPES)[number]; productFirstVisibleMs?: number; whyItStops: string; strength: "STRONG" | "AVERAGE" | "WEAK" }>;
+  angle: Readonly<{ coreAngle: string; buyerMotivation: string; desireOrProblem: string; emotionalTriggers: readonly string[]; awarenessLevel: (typeof WINNER_AWARENESS_LEVELS)[number]; promise: string; proof: string; offer: string; objectionsHandled: readonly string[]; cta: string; ctaTimestampMs?: number }>;
+  timeline: readonly Readonly<{ startMs: number; endMs: number; beat: (typeof WINNER_BEATS)[number]; visual: string; voiceLine: string; onScreenText: string; purpose: string }>[];
+  voice: Readonly<{ deliveryStyle: string; scriptStructure: string; keyPhrases: readonly string[] }>;
+  editing: Readonly<{ format: string; captionStyle: string; productProminence: string; soundOffComprehension: string; pacingAssessment: string }>;
+  claimsCheck: readonly Readonly<{ claim: string; status: (typeof WINNER_CLAIM_STATUSES)[number]; note: string }>[];
+  performanceRead: string;
+  nextCreativeBrief: Readonly<{ keep: readonly string[]; test: readonly Readonly<{ idea: string; hypothesis: string; type: (typeof WINNER_TEST_TYPES)[number] }>[]; avoid: readonly string[] }>;
+}>;
+/** Application-computed facts shown beside the AI report; none of these come from the model. */
+export type WinnerMeasurements = Readonly<{
+  durationMs: number; width: number; height: number; frameCount: number;
+  shotCount?: number; sceneCutsMs: readonly number[]; averageShotMs?: number; firstCutMs?: number;
+  hasAudio: boolean; transcriptStatus: CreativeDnaAudioTranscript["status"] | "NOT_REQUESTED"; transcriptModel?: string; transcriptText?: string;
+  transcriptSegments: readonly CreativeDnaTranscriptSegment[]; speechCoverage?: number; wordsPerMinute?: number; timeToFirstWordMs?: number;
+  audioPresentRatio?: number; integratedLufs?: number;
+  performance?: Readonly<{ spend?: number; purchases?: number; revenue?: number; cpa?: number; roas?: number; linkCtr?: number; cpc?: number; cpm?: number; currency?: string; dateStart?: string; dateEnd?: string; metricSource?: string; impressions?: number; threeSecondViews?: number; thruPlays?: number; hookRate?: number; holdRate?: number }>;
+}>;
+export type CreativeWinnerReportStatus = "PENDING" | "READY" | "FAILED";
+export type CreativeWinnerReportRecord = Readonly<{
+  creativeReferenceId: string; status: CreativeWinnerReportStatus; report?: WinnerReport; measurements?: WinnerMeasurements;
+  failureMessage?: string; providerMetadata: Readonly<Record<string, unknown>>; createdAt: string; updatedAt: string;
+}>;
 export type CreativeDnaAnalysisInput = Readonly<{
   referenceId: string; displayName: string; mediaMetadata: CreativeDnaMediaMetadata; frames: readonly CreativeDnaFrame[];
-  pacing?: CreativeDnaPacing; audioTranscript?: CreativeDnaAudioTranscript;
+  pacing?: CreativeDnaPacing; audioTranscript?: CreativeDnaAudioTranscript; audioLevels?: CreativeDnaAudioLevels;
   operatorNotes?: string; operatorTranscript?: string; performance?: CreativePerformanceContext;
   currentProduct?: Readonly<{ name: string; description: string; verifiedClaims: readonly ProductClaim[] }>;
 }>;
@@ -1044,6 +1105,10 @@ export interface CreativeDnaRepository {
   updateReference(reference: CreativeReference): Promise<void>;
   getRevision(id: string): Promise<CreativeDnaRevision>;
   listApproved(productId?: string, sourceProjectId?: string): Promise<readonly Readonly<{ reference: CreativeReference; revision: CreativeDnaRevision }>[] >;
+  saveWinnerReport(record: CreativeWinnerReportRecord): Promise<void>;
+  saveMetaLink(link: CreativeMetaLink): Promise<void>;
+  listMetaLinks(): Promise<readonly CreativeMetaLink[]>;
+  listWinnerReports(): Promise<readonly CreativeWinnerReportRecord[]>;
   saveRevision(revision: CreativeDnaRevision): Promise<void>;
   approveRevision(referenceId: string, revisionId: string, actor: string, timestamp: string): Promise<CreativeDnaRevision>;
   getOrCreateOperation(input: Readonly<{ id: string; referenceId: string; operationKey: string; timestamp: string }>): Promise<CreativeDnaProviderOperation>;

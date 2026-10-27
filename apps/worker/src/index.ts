@@ -35,6 +35,20 @@ const cleanupMedia = async () => {
 await cleanupMedia();
 const cleanupTimer = setInterval(() => void cleanupMedia(), Number(process.env.MEDIA_CLEANUP_INTERVAL_MS ?? "3600000"));
 cleanupTimer.unref();
+// Imported Meta winners get their lifetime results refreshed daily; read-only, no paid AI calls.
+const refreshMetaWinners = async () => {
+  if (!runtime.metaWinners) return;
+  try {
+    const result = await runtime.metaWinners.refreshAll();
+    if (result.refreshed || result.failed) console.info("meta winner refresh completed", result);
+  } catch (error) {
+    console.error("meta winner refresh failed", { errorName: error instanceof Error ? error.name : "UnknownError" });
+  }
+};
+const metaFirstRun = setTimeout(() => void refreshMetaWinners(), 10 * 60_000);
+metaFirstRun.unref();
+const metaTimer = setInterval(() => void refreshMetaWinners(), Number(process.env.META_REFRESH_INTERVAL_MS ?? "86400000"));
+metaTimer.unref();
 worker.on("failed", (job, error) => console.error("workflow job failed", job?.id, error));
 let stopping = false;
 const shutdown = async () => {
@@ -42,6 +56,8 @@ const shutdown = async () => {
   stopping = true;
   clearInterval(dispatchTimer);
   clearInterval(cleanupTimer);
+  clearTimeout(metaFirstRun);
+  clearInterval(metaTimer);
   await worker.close();
   await queue.close();
   await connection.quit();

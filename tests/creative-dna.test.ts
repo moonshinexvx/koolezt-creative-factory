@@ -51,6 +51,48 @@ async function register(setup: Awaited<ReturnType<typeof harness>>) {
 }
 
 describe("Winning Creative DNA", () => {
+  it("files a Product-level winner under the Product's campaign and produces a Winner Analysis report with measurements", async () => {
+    const setup = await harness();
+    try {
+      const reference = await setup.service.register({ productId: setup.project.productId, assetId: setup.asset.id, displayName: "Library winner", operatorStatus: "WINNER", actor: "owner", performance: { spend: 120, purchases: 4, revenue: 480, currency: "USD" } });
+      expect(reference).toMatchObject({ sourceProjectId: setup.project.id, productId: setup.project.productId });
+      const job = await setup.service.requestAnalysis(reference.id, crypto.randomUUID());
+      expect((await setup.service.listWinnerReports())[0]).toMatchObject({ status: "PENDING" });
+      expect((await setup.service.processJob(job.id)).status).toBe("COMPLETED");
+      const [report] = await setup.service.listWinnerReports();
+      expect(report).toMatchObject({ creativeReferenceId: reference.id, status: "READY", report: { hook: { hookType: "PRODUCT_REVEAL" } }, measurements: { durationMs: 15_000, frameCount: 2, transcriptStatus: "NOT_REQUESTED", performance: { cpa: 30, roas: 4 } } });
+      await expect(setup.service.register({ productId: "00000000-0000-4000-8000-000000000000", assetId: setup.asset.id, displayName: "x", operatorStatus: "WINNER", actor: "owner" })).rejects.toBeDefined();
+    } finally { await setup.dispose(); }
+  });
+
+  it("regenerates only the report for an approved winner without touching its DNA approval", async () => {
+    const provider = new FakeCreativeProvider();
+    const setup = await harness(provider);
+    try {
+      const reference = await register(setup);
+      expect((await setup.service.processJob((await setup.service.requestAnalysis(reference.id, crypto.randomUUID())).id)).status).toBe("COMPLETED");
+      const draft = (await setup.service.list()).find((entry) => entry.reference.id === reference.id)!.revisions[0]!;
+      await setup.service.approve(reference.id, draft.id, "owner");
+      await expect(setup.service.requestAnalysis(reference.id, crypto.randomUUID())).rejects.toMatchObject({ code: "CREATIVE_DNA_ANALYSIS_EXISTS" });
+      const reportJob = await setup.service.requestAnalysis(reference.id, crypto.randomUUID(), "REPORT");
+      await expect(setup.service.requestAnalysis(reference.id, crypto.randomUUID(), "REPORT")).rejects.toMatchObject({ code: "WINNER_REPORT_IN_PROGRESS" });
+      expect((await setup.service.processJob(reportJob.id)).status).toBe("COMPLETED");
+      const entry = (await setup.service.list()).find((item) => item.reference.id === reference.id)!;
+      expect(entry.reference).toMatchObject({ analysisStatus: "APPROVED", approvedRevisionId: draft.id });
+      expect(entry.revisions).toHaveLength(1);
+      expect((await setup.service.listWinnerReports())[0]).toMatchObject({ status: "READY" });
+      expect(provider.calls).toHaveLength(2);
+    } finally { await setup.dispose(); }
+  });
+
+  it("refuses a report-only run before the creative has been analyzed", async () => {
+    const setup = await harness();
+    try {
+      const reference = await register(setup);
+      await expect(setup.service.requestAnalysis(reference.id, crypto.randomUUID(), "REPORT")).rejects.toMatchObject({ code: "WINNER_REPORT_REQUIRES_ANALYSIS" });
+    } finally { await setup.dispose(); }
+  });
+
   it("registers a historical video without automatically running paid analysis", async () => {
     const provider = new FakeCreativeProvider();
     const setup = await harness(provider);

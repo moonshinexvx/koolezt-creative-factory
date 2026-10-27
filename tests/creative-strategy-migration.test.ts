@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 describe("creative strategy additive migrations", () => {
   it("adds isolated strategy persistence, immutable revisions, durable provider results, handoffs, and project links", async () => {
     const names = (await readdir(new URL("../db/migrations", import.meta.url))).filter((name) => name.endsWith(".sql")).sort();
-    expect(names.at(-1)).toBe("0022_provider_neutral_ai_source.sql");
+    expect(names.at(-1)).toBe("0024_meta_ad_links.sql");
     const sql = await readFile(new URL("../db/migrations/0016_creative_strategy.sql", import.meta.url), "utf8");
     for (const table of ["creative_strategy_batches", "creative_strategy_concepts", "creative_strategy_concept_revisions", "creative_strategy_provider_operations", "creative_strategy_handoffs"]) expect(sql).toContain(`CREATE TABLE ${table}`);
     expect(sql).toContain("result_payload jsonb");
@@ -69,5 +69,22 @@ describe("creative strategy additive migrations", () => {
     for (const table of ["variant_creative_package_revisions", "creative_strategy_concept_revisions", "creative_dna_revisions"]) expect(sql).toContain(`ADD CONSTRAINT ${table}_source_check`);
     expect(sql.match(/'AI_PROVIDER','OPENAI'/g)).toHaveLength(3);
     expect(sql).not.toMatch(/\b(?:UPDATE|INSERT INTO|DROP TABLE|TRUNCATE|DELETE FROM)\b/i);
+  });
+
+  it("adds Winner Analysis reports in their own table without touching DNA revisions", async () => {
+    const sql = await readFile(new URL("../db/migrations/0023_winner_reports.sql", import.meta.url), "utf8");
+    expect(sql).toContain("CREATE TABLE creative_winner_reports");
+    expect(sql).toContain("creative_reference_id uuid PRIMARY KEY REFERENCES creative_references(id)");
+    expect(sql).toContain("'PENDING','READY','FAILED'");
+    expect(sql).not.toMatch(/ALTER TABLE creative_dna_revisions|ALTER TABLE creative_references/i);
+    expect(sql).not.toMatch(/\b(?:UPDATE|INSERT INTO|DROP TABLE|TRUNCATE|DELETE FROM)\b/i);
+  });
+
+  it("links winners to Meta ads read-only, one winner per ad", async () => {
+    const sql = await readFile(new URL("../db/migrations/0024_meta_ad_links.sql", import.meta.url), "utf8");
+    expect(sql).toContain("CREATE TABLE creative_meta_ad_links");
+    expect(sql).toContain("ad_id text NOT NULL UNIQUE");
+    expect(sql).not.toMatch(/token|secret/i);
+    expect(sql).not.toMatch(/ALTER TABLE|\bUPDATE\b|INSERT INTO|DROP TABLE|TRUNCATE|DELETE FROM/i);
   });
 });

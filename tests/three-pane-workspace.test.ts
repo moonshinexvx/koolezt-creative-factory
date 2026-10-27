@@ -9,7 +9,7 @@ describe("three-pane creative workspace", () => {
     expect(source).toContain('className="project-browser"');
     expect(source).toContain('role="tablist"');
     for (const tab of ["Creative Brief", "Scene Review", "Voice", "Published Final", "Creative Variants"]) expect(source).toContain(tab);
-    for (const campaignAction of ["+ Create Campaign", "+ Create Project", "Winning Creative", "Concepts"]) expect(source).toContain(campaignAction);
+    for (const campaignAction of ["+ Create Campaign", "+ Create Project", "Winner Analysis", "Concepts"]) expect(source).toContain(campaignAction);
     expect(source.match(/\+ Create Project/g)).toHaveLength(1);
     expect(source).toContain("campaignWorkspaceView ? campaignTabs : executionTabs");
     expect(source).toContain("const openCampaign = () =>");
@@ -38,22 +38,23 @@ describe("three-pane creative workspace", () => {
     expect(source).toContain("schedule its variant MP4s for cleanup");
   });
 
-  it("shows an explicit guarded Creative Reference source-video upload workflow", async () => {
-    const source = await readFile(new URL("../apps/web/src/main.tsx", import.meta.url), "utf8");
-    expect(source).toContain("Source video (required)");
-    expect(source).toContain('type="file" accept="video/mp4,video/webm,.mp4,.webm"');
-    expect(source).toContain("No source video selected. Choose an MP4 or WebM file.");
-    expect(source).toContain("Remove selected video");
-    expect(source).toContain("Create Creative Reference");
-    expect(source).toContain("disabled={dnaWorking||!referenceVideo}");
-    expect(source).toContain("Uploading source video…");
-    expect(source).toContain("new XMLHttpRequest()");
-    expect(source).toContain("/creative-references/upload");
-    expect(source).toContain("/creative-references/complete");
-    expect(source).toContain('request.open("PUT",target.url)');
-    expect(source).toContain('crypto.subtle.digest("SHA-256",bytes)');
-    expect(source).not.toContain('request.open("POST",`/api/projects/${selected.id}/creative-references`)');
-    expect(source).toContain("Analyze Creative DNA (OpenAI)");
-    expect(source).not.toContain('<input hidden type="file" accept="video/mp4,video/webm"');
+  it("moves winning-creative upload and analysis to the Winner Analysis page", async () => {
+    const main = await readFile(new URL("../apps/web/src/main.tsx", import.meta.url), "utf8");
+    const page = await readFile(new URL("../apps/web/src/winners.tsx", import.meta.url), "utf8");
+    expect(main).toContain(">Winner Analysis</button>");
+    expect(main).toContain('history.pushState({}, "", "/winners")');
+    expect(main).not.toContain('id="panel-dna"');
+    expect(main).not.toContain('["dna", "Winning Creative"]');
+    expect(main).toContain('parts[2] === "dna" ? "strategy" : parts[2]');
+    expect(page).toContain("Product (required)");
+    expect(page).toContain('accept="video/mp4,video/webm,.mp4,.webm"');
+    expect(page).toContain("/api/products/${upload.productId}/creative-references");
+    expect(page).toContain('request.open("PUT", url)');
+    expect(page).toContain('crypto.subtle.digest("SHA-256"');
+    expect(page).toContain("Upload and analyze");
+    expect(page).toContain('mode: "REPORT"');
+    expect(page).toContain("Why it likely won");
+    expect(page).toContain("Music and sound effects cannot be analyzed");
+    expect(page).toContain("Open campaign with this winner");
   });
 });

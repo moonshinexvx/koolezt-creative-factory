@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { DomainError } from "@koolezt/domain";
 import type { ConceptProviderResponse, CreativeConceptProviderDraft, CreativeDnaAnalysisInput, CreativeInputSnapshot, CreativeProvider, ExecutionFeasibilityPlan, NarrationRewriteInput, ProviderOperationContext, ProviderSubmission, StrategyGenerationInput, StrategyProviderResponse, VariantCreativePackageDraft, VariantPackageGenerationInput } from "@koolezt/domain";
 import { OPENAI_CREATIVE_INSTRUCTIONS as CREATIVE_INSTRUCTIONS, OPENAI_CREATIVE_PROMPT_VERSION as CREATIVE_PROMPT_VERSION, OPENAI_NARRATION_REWRITE_INSTRUCTIONS as NARRATION_REWRITE_INSTRUCTIONS } from "./openai-creative-prompt.js";
-import { backgroundConceptInstructions, conceptInstructions, DNA_ANALYSIS_INSTRUCTIONS, dnaSchema, legacyConceptSchema, narrationRewriteSchema, referenceCatalog, strategyExecutionSchemaFor, strategyInstructions, strategyProviderInput, strategySchemaFor, VARIANT_PACKAGE_INSTRUCTIONS, variantPackageSchema } from "./creative-contract.js";
+import { backgroundConceptInstructions, conceptInstructions, DNA_ANALYSIS_INSTRUCTIONS, dnaAnalysisSchema, WINNER_REPORT_INSTRUCTIONS, legacyConceptSchema, narrationRewriteSchema, referenceCatalog, strategyExecutionSchemaFor, strategyInstructions, strategyProviderInput, strategySchemaFor, VARIANT_PACKAGE_INSTRUCTIONS, variantPackageSchema } from "./creative-contract.js";
 
 export type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
 type JsonSchema = Readonly<Record<string, unknown>>;
@@ -220,9 +220,9 @@ export class ClaudeCreativeProvider implements CreativeProvider {
     };
     const images = input.frames.map((frame): ImageBlock => ({ type: "image", source: { type: "base64", media_type: frame.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: frame.bytesBase64 } }));
     return this.background({
-      system: DNA_ANALYSIS_INSTRUCTIONS,
+      system: DNA_ANALYSIS_INSTRUCTIONS + WINNER_REPORT_INSTRUCTIONS,
       payload: { operationKey: context.operationKey, reference: safeInput },
-      images, schema: dnaSchema,
+      images, schema: dnaAnalysisSchema,
       effort: this.backgroundEffort, timeoutMs: this.backgroundTimeoutMs, invalidCode: "CLAUDE_DNA_INVALID"
     }, "CLAUDE_DNA_SUBMISSION_UNKNOWN", "Creative DNA analysis");
   }

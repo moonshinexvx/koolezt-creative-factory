@@ -1,9 +1,10 @@
 import { resolve } from "node:path";
-import { CompositionProviderRegistry, CreativeDnaService, CreativeFactoryService, CreativeStrategyService, VideoProviderRegistry } from "@koolezt/application";
+import { CompositionProviderRegistry, CreativeDnaService, CreativeFactoryService, CreativeStrategyService, isMetaVideoUrl, MetaWinnerService, VideoProviderRegistry } from "@koolezt/application";
+import { DomainError } from "@koolezt/domain";
 import { DesktopCompositionProvider, PostgresCreativeDnaStore, PostgresCreativeStrategyStore, PostgresDesktopRenderJobStore, PostgresDurableMediaAssetCatalog, PostgresExternalMediaStagingStore, PostgresFactoryRepository, PostgresMediaAssetCatalog, PostgresRenderWorkerIdentityStore, PostgresProjectArchiveStore, PostgresVariantCreativePackageStore, PostgresVariantFactoryStore, createPostgresPool } from "@koolezt/infrastructure";
 import { CloudflareAccessVerifier } from "./browser-auth.js";
 import { DurableReadyPublisher, FakeExternalMediaDeliveryProvider, FfmpegCreativeDnaPreprocessor, FfprobeMediaInspector, HybridDurableMediaStore, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, S3DurableMediaStore, S3ExternalMediaDeliveryProvider, StorageBackedMediaInspector } from "@koolezt/media";
-import { ClaudeCreativeProvider, CreatomateCompositionProvider, OpenAIAudioTranscriber, CreatomateOutputIngestor, ElevenLabsVoiceProvider, FakeCompositionProvider, FakeCreativeProvider, FakeVideoGenerationProvider, FakeVoiceProvider, HttpCreatomateTransport, HttpKlingTransport, HttpSeedanceTransport, KlingOutputIngestor, KlingVideoGenerationProvider, OpenAICreativeProvider, OpenAIVoiceProvider, OPENAI_VOICE_DEFAULT_STYLE, RoutedVideoOutputIngestor, SeedanceOutputIngestor, SeedanceVideoGenerationProvider, UnavailableCompositionProvider, UnavailableVideoGenerationProvider } from "@koolezt/providers";
+import { ClaudeCreativeProvider, CreatomateCompositionProvider, HttpMetaAdsGateway, OpenAIAudioTranscriber, CreatomateOutputIngestor, ElevenLabsVoiceProvider, FakeCompositionProvider, FakeCreativeProvider, FakeVideoGenerationProvider, FakeVoiceProvider, HttpCreatomateTransport, HttpKlingTransport, HttpSeedanceTransport, KlingOutputIngestor, KlingVideoGenerationProvider, OpenAICreativeProvider, OpenAIVoiceProvider, OPENAI_VOICE_DEFAULT_STYLE, RoutedVideoOutputIngestor, SeedanceOutputIngestor, SeedanceVideoGenerationProvider, UnavailableCompositionProvider, UnavailableVideoGenerationProvider } from "@koolezt/providers";
 import type { ClaudeEffort } from "@koolezt/providers";
 
 export function createRuntime(env = process.env) {
@@ -142,7 +143,30 @@ export function createRuntime(env = process.env) {
   const creativeDnaMaxFrames = Number(env.CREATIVE_DNA_MAX_FRAMES ?? "30");
   if (!Number.isInteger(creativeDnaMaxFrames) || creativeDnaMaxFrames < 12 || creativeDnaMaxFrames > 60) throw new Error("CREATIVE_DNA_MAX_FRAMES must be an integer between 12 and 60.");
   const creativeDnaService = new CreativeDnaService({ repository, dna:creativeDna, provider:creativeProvider, storage, preprocessor:new FfmpegCreativeDnaPreprocessor(storage,env.FFMPEG_PATH??"ffmpeg",env.FFPROBE_PATH??"ffprobe",{maxFrames:creativeDnaMaxFrames,...(dnaTranscriber?{transcriber:dnaTranscriber}:{})}) });
+  // Meta Ads is read-only and enabled only when its own token and ad accounts are configured.
+  const metaVideoMaxBytes = Number(env.META_VIDEO_MAX_BYTES ?? 500 * 1024 * 1024);
+  const downloadMetaVideo = async (url: string) => {
+    const signal = AbortSignal.timeout(Number(env.META_VIDEO_DOWNLOAD_TIMEOUT_MS ?? "80000"));
+    let current = url;
+    let response = await fetch(current, { redirect: "manual", signal });
+    // Follow a few CDN redirects, re-checking every hop so a redirect can never leave Meta's CDN.
+    for (let hops = 0; response.status >= 300 && response.status < 400 && hops < 3; hops++) {
+      const next = response.headers.get("location");
+      if (!next || !isMetaVideoUrl(new URL(next, current).toString())) throw new DomainError("META_VIDEO_URL_UNTRUSTED", "Meta redirected the video download to an unexpected location.");
+      current = new URL(next, current).toString();
+      response = await fetch(current, { redirect: "manual", signal });
+    }
+    if (!response.ok) throw new DomainError("META_VIDEO_DOWNLOAD_FAILED", `Meta video download failed with HTTP ${response.status}.`);
+    if (Number(response.headers.get("content-length") ?? 0) > metaVideoMaxBytes) throw new DomainError("META_VIDEO_TOO_LARGE", "The Meta video is larger than the configured limit.");
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > metaVideoMaxBytes) throw new DomainError("META_VIDEO_TOO_LARGE", "The Meta video is larger than the configured limit.");
+    return bytes;
+  };
+  const metaWinners = env.META_ADS_ACCESS_TOKEN && env.META_AD_ACCOUNT_IDS
+    ? new MetaWinnerService({ gateway: new HttpMetaAdsGateway({ accessToken: env.META_ADS_ACCESS_TOKEN, accountIds: env.META_AD_ACCOUNT_IDS.split(","), apiVersion: env.META_GRAPH_API_VERSION ?? "v24.0" }), dna: creativeDnaService, repository: creativeDna, storage, downloadVideo: downloadMetaVideo })
+    : undefined;
   return {
+    metaWinners,
     pool,
     repository,
     creativeProvider,

@@ -31,8 +31,8 @@ function runtime(overrides: Record<string,unknown> = {}) {
   const list = vi.fn(async ():Promise<unknown[]>=>[]);
   const listApproved = vi.fn(async ():Promise<unknown[]>=>[]);
   return {
-    service:{getProject:vi.fn(async()=>project)},storage:{put,getAsset:vi.fn(async()=>asset),read:vi.fn(async()=>Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from("ftypisomfixture")]))},
-    creativeDnaService:{register,requestAnalysis,list,listApproved},durableMediaStore:{createUpload,completeUpload,deleteAsset,rejectUpload:vi.fn(async()=>undefined)},
+    service:{getProject:vi.fn(async()=>project),listProducts:vi.fn(async()=>[{id:project.productId,name:"Dog Address Sign"}])},storage:{put,getAsset:vi.fn(async()=>asset),read:vi.fn(async()=>Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from("ftypisomfixture")]))},
+    creativeDnaService:{register,requestAnalysis,list,listApproved,listWinnerReports:vi.fn(async()=>[]),listMetaLinks:vi.fn(async()=>[]),campaignProjectForProduct:vi.fn(async()=>project)},durableMediaStore:{createUpload,completeUpload,deleteAsset,rejectUpload:vi.fn(async()=>undefined)},
     renderWorkerIdentities:{list:vi.fn(async()=>[])},...overrides,
     spies:{put,createUpload,completeUpload,register,requestAnalysis,deleteAsset,list,listApproved}
   };
@@ -51,6 +51,51 @@ describe("Creative Reference source-video upload API",()=>{
     expect(setup.spies.completeUpload).toHaveBeenCalledWith(asset.id);
     expect(setup.spies.register).toHaveBeenCalledWith(expect.objectContaining({assetId:asset.id,displayName:"Historical winner",operatorStatus:"WINNER"}));
     expect(setup.spies.requestAnalysis).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("files a Product-level winner under that Product's campaign and lists it with its report",async()=>{
+    const setup=runtime();const app=buildServer(setup as never);
+    const authorization=await app.inject({method:"POST",url:`/api/products/${project.productId}/creative-references/upload`,payload:{filename:"winner.mp4",mimeType:"video/mp4",byteSize:asset.byteSize,sha256:asset.sha256}});
+    expect(authorization.statusCode).toBe(200);
+    expect(setup.creativeDnaService.campaignProjectForProduct).toHaveBeenCalledWith(project.productId);
+    expect(setup.spies.createUpload).toHaveBeenCalledWith(expect.objectContaining({projectId:project.id,purpose:"CREATIVE_REFERENCE"}));
+    const completion=await app.inject({method:"POST",url:`/api/products/${project.productId}/creative-references/complete`,payload:{assetId:asset.id,displayName:"Library winner",operatorStatus:"WINNER"}});
+    expect(completion.statusCode).toBe(200);
+    expect(setup.spies.register).toHaveBeenCalledWith(expect.objectContaining({projectId:project.id,assetId:asset.id}));
+    const report={creativeReferenceId:"reference-1",status:"READY",providerMetadata:{},createdAt:"t",updatedAt:"t"};
+    setup.creativeDnaService.list=vi.fn(async()=>[{reference:{id:"reference-1",sourceAssetId:asset.id,productId:project.productId},revisions:[]}]);
+    setup.creativeDnaService.listWinnerReports=vi.fn(async()=>[report]) as never;
+    const listed=await app.inject({method:"GET",url:"/api/creative-references"});
+    expect(listed.json()[0]).toMatchObject({productName:"Dog Address Sign",winnerReport:{status:"READY"}});
+    await app.close();
+  });
+
+  it("reports the Meta integration as not configured instead of failing",async()=>{
+    const setup=runtime();const app=buildServer(setup as never);
+    const status=await app.inject({method:"GET",url:"/api/meta/status"});
+    expect(status.json()).toEqual({configured:false});
+    const top=await app.inject({method:"GET",url:"/api/meta/top-ads?accountId=act_123456&since=2026-09-01&until=2026-10-26"});
+    expect(top.json().error).toBe("META_NOT_CONFIGURED");
+    await app.close();
+  });
+
+  it("links a manually uploaded winner to its Meta ad after registration",async()=>{
+    const linkUploaded=vi.fn(async()=>undefined);
+    const setup=runtime({metaWinners:{linkUploaded}});const app=buildServer(setup as never);
+    const completion=await app.inject({method:"POST",url:`/api/products/${project.productId}/creative-references/complete`,payload:{assetId:asset.id,displayName:"Meta winner",operatorStatus:"WINNER",metaAccountId:"123456",metaAdId:"120200000000000001"}});
+    expect(completion.statusCode).toBe(200);
+    expect(setup.spies.register).toHaveBeenCalledWith(expect.not.objectContaining({metaAdId:expect.anything()}));
+    expect(linkUploaded).toHaveBeenCalledWith("reference-1","act_123456","120200000000000001");
+    await app.close();
+  });
+
+  it("starts a report-only regeneration when requested",async()=>{
+    const setup=runtime();const app=buildServer(setup as never);
+    const requestId=crypto.randomUUID();
+    const response=await app.inject({method:"POST",url:"/api/creative-references/reference-1/analyze",payload:{requestId,mode:"REPORT"}});
+    expect(response.statusCode).toBe(202);
+    expect(setup.spies.requestAnalysis).toHaveBeenCalledWith("reference-1",requestId,"REPORT");
     await app.close();
   });
 
@@ -133,14 +178,14 @@ describe("Creative Reference source-video upload API",()=>{
     await app.close();
   });
 
-  it("scopes Creative References and approved Winner DNA to the selected Campaign",async()=>{
+  it("scopes Creative References to the Campaign and shares approved Winner DNA across its Product",async()=>{
     const setup=runtime();const app=buildServer(setup as never);
     const references=await app.inject({method:"GET",url:`/api/creative-references?projectId=${project.id}`});
     const approved=await app.inject({method:"GET",url:`/api/creative-references/approved?projectId=${project.id}`});
     expect(references.statusCode).toBe(200);
     expect(approved.statusCode).toBe(200);
     expect(setup.spies.list).toHaveBeenCalledWith(project.id);
-    expect(setup.spies.listApproved).toHaveBeenCalledWith(project.productId,project.id);
+    expect(setup.spies.listApproved).toHaveBeenCalledWith(project.productId);
     expect(setup.service.getProject).toHaveBeenCalledWith(project.id);
     await app.close();
   });

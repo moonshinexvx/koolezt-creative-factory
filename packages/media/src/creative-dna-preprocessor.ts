@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DomainError } from "@koolezt/domain";
-import type { CreativeDnaAudioTranscript, CreativeDnaFrame, CreativeDnaPacing, CreativeDnaPreprocessed, CreativeDnaPreprocessor, CreativeDnaTranscriber, GeneratedAsset, StorageProvider } from "@koolezt/domain";
+import type { CreativeDnaAudioLevels, CreativeDnaAudioTranscript, CreativeDnaFrame, CreativeDnaPacing, CreativeDnaPreprocessed, CreativeDnaPreprocessor, CreativeDnaTranscriber, GeneratedAsset, StorageProvider } from "@koolezt/domain";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export const MAX_CREATIVE_DNA_FRAMES = 30;
@@ -60,6 +60,26 @@ export function parseSceneCuts(showinfoLog: string, durationMs: number): readonl
   return cuts.sort((a, b) => a - b).slice(0, MAX_SCENE_CUTS);
 }
 
+// Silence below this level counts as no audio; -70 LUFS is FFmpeg's reported floor for silent tracks.
+const SILENCE_THRESHOLD_DB = -45;
+const LOUDNESS_FLOOR_LUFS = -69;
+
+/** Parses silencedetect and ebur128 summary output. Silence that runs to the end has no silence_end line. */
+export function parseAudioLevels(log: string, durationMs: number): CreativeDnaAudioLevels {
+  let silentMs = 0;
+  let openStartMs: number | undefined;
+  for (const match of log.matchAll(/silence_(start|end):\s*(-?[0-9]+(?:\.[0-9]+)?)/g)) {
+    const atMs = Math.max(0, Math.round(Number(match[2]) * 1000));
+    if (match[1] === "start") openStartMs = atMs;
+    else if (openStartMs !== undefined) { silentMs += Math.max(0, atMs - openStartMs); openStartMs = undefined; }
+  }
+  if (openStartMs !== undefined) silentMs += Math.max(0, durationMs - openStartMs);
+  const loudness = [...log.matchAll(/^\s*I:\s*(-?[0-9]+(?:\.[0-9]+)?) LUFS/gm)].at(-1);
+  const integratedLufs = loudness ? Number(loudness[1]) : undefined;
+  const audioPresentRatio = durationMs > 0 ? Math.min(1, Math.max(0, 1 - silentMs / durationMs)) : 0;
+  return { audioPresentRatio: Math.round(audioPresentRatio * 1000) / 1000, ...(integratedLufs !== undefined && integratedLufs > LOUDNESS_FLOOR_LUFS ? { integratedLufs } : {}) };
+}
+
 function run(command: string, args: readonly string[]): Promise<Readonly<{ stdout: Buffer; stderr: string }>> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, [...args], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
@@ -107,7 +127,8 @@ export class FfmpegCreativeDnaPreprocessor implements CreativeDnaPreprocessor {
         frames.push({ timestampMs, mimeType: "image/jpeg", bytesBase64: bytes.toString("base64"), sha256: createHash("sha256").update(bytes).digest("hex") });
       }
       const audioTranscript = await this.transcribe(root, input, durationMs, hasAudio);
-      return { mediaMetadata, frames, pacing: creativeDnaPacing(durationMs, sceneCutsMs), audioTranscript };
+      const audioLevels = hasAudio ? await this.measureAudioLevels(input, durationMs) : undefined;
+      return { mediaMetadata, frames, pacing: creativeDnaPacing(durationMs, sceneCutsMs), audioTranscript, ...(audioLevels ? { audioLevels } : {}) };
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -116,6 +137,15 @@ export class FfmpegCreativeDnaPreprocessor implements CreativeDnaPreprocessor {
   private async detectSceneCuts(input: string, durationMs: number): Promise<readonly number[]> {
     const { stderr } = await run(this.ffmpegPath, ["-hide_banner", "-loglevel", "info", "-i", input, "-an", "-vf", `scale=320:-2,select='gt(scene,${CREATIVE_DNA_SCENE_THRESHOLD})',showinfo`, "-f", "null", "-"]);
     return parseSceneCuts(stderr, durationMs);
+  }
+
+  private async measureAudioLevels(input: string, durationMs: number): Promise<CreativeDnaAudioLevels | undefined> {
+    try {
+      const { stderr } = await run(this.ffmpegPath, ["-hide_banner", "-nostats", "-loglevel", "info", "-i", input, "-vn", "-af", `silencedetect=n=${SILENCE_THRESHOLD_DB}dB:d=0.4,ebur128=framelog=verbose`, "-f", "null", "-"]);
+      return parseAudioLevels(stderr, durationMs);
+    } catch {
+      return undefined;
+    }
   }
 
   /** Transcription is best-effort context: a failure is reported to the analysis instead of failing it. */

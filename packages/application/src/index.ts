@@ -45,6 +45,8 @@ import type {
 export { CreativeStrategyService, STRATEGY_LIMITS, STRATEGY_REQUESTED_COUNTS, DEFAULT_STRATEGY_REQUESTED_COUNT, boundStrategyHistory, canonicalizeStrategyDraft, selectedStrategySnapshot, validateStrategyDraft, validateStrategySet } from "./strategy.js";
 export { assembleCreativeConcept, bindCanonicalVisualReferences, boundedConceptProviderResult, conceptProviderResultSha256, validateConceptExecution } from "./concept-authority.js";
 export { CreativeDnaService, canonicalizeCreativeDna, selectedWinnerDnaSnapshot } from "./creative-dna.js";
+export { isMetaVideoUrl, MetaWinnerService, performanceFromMeta } from "./meta-winners.js";
+export type { MetaImportResult } from "./meta-winners.js";
 export { assertExecutionFeasible, buildExecutionFeasibilityPlan } from "./execution-feasibility.js";
 
 type Clock = () => Date;

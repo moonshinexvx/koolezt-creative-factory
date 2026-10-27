@@ -192,12 +192,12 @@ describe("create-project browser workflow", () => {
     const source = await readFile(new URL("../apps/web/src/main.tsx", import.meta.url), "utf8");
     expect(source.match(/\+ Create Campaign/g)).toHaveLength(1);
     expect(source.match(/\+ Create Project/g)).toHaveLength(1);
-    expect(source).toContain("Winning Creative");
+    expect(source).toContain("Winner Analysis");
     expect(source).toContain("Concepts");
     expect(source).toContain("Campaign Product References");
     expect(source).toContain("Campaign Product Visual Authority");
-    expect(source).toContain("Only approved Winning Creative owned by this Campaign is available.");
-    expect(source).toContain("/api/creative-references?projectId=");
+    expect(source).toContain("Approved winners for this Product from <a href=\"/winners\">Winner Analysis</a> are available.");
+    expect(source).not.toContain("/api/creative-references?projectId=");
     expect(source).toContain("/api/creative-references/approved?projectId=");
     expect(source).toContain("Make Primary");
     expect(source).toContain("Existing immutable snapshots and historical executions are never rewritten.");

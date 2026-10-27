@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { DomainError } from "@koolezt/domain";
 import type { ConceptProviderResponse, CreativeConceptProviderDraft, CreativeDnaAnalysisInput, CreativeInputSnapshot, CreativeProvider, ExecutionFeasibilityPlan, NarrationRewriteInput, ProviderOperationContext, ProviderSubmission, StrategyGenerationInput, StrategyProviderResponse, VariantCreativePackageDraft, VariantPackageGenerationInput } from "@koolezt/domain";
 import { OPENAI_CREATIVE_INSTRUCTIONS, OPENAI_CREATIVE_PROMPT_VERSION, OPENAI_NARRATION_REWRITE_INSTRUCTIONS } from "./openai-creative-prompt.js";
-import { backgroundConceptInstructions, conceptInstructions, DNA_ANALYSIS_INSTRUCTIONS, dnaSchema, legacyConceptSchema, narrationRewriteSchema, referenceCatalog, strategyExecutionSchemaFor, strategyInstructions, strategyProviderInput, strategySchemaFor, VARIANT_PACKAGE_INSTRUCTIONS, variantPackageSchema } from "./creative-contract.js";
+import { backgroundConceptInstructions, conceptInstructions, DNA_ANALYSIS_INSTRUCTIONS, dnaAnalysisSchema, WINNER_REPORT_INSTRUCTIONS, legacyConceptSchema, narrationRewriteSchema, referenceCatalog, strategyExecutionSchemaFor, strategyInstructions, strategyProviderInput, strategySchemaFor, VARIANT_PACKAGE_INSTRUCTIONS, variantPackageSchema } from "./creative-contract.js";
 
 export class OpenAICreativeProvider implements CreativeProvider {
   private readonly client: OpenAI;
@@ -151,9 +151,9 @@ export class OpenAICreativeProvider implements CreativeProvider {
       const images=input.frames.map(frame=>({type:"input_image" as const,image_url:`data:${frame.mimeType};base64,${frame.bytesBase64}`,detail:"high" as const}));
       const response=await this.client.responses.create({
         model:this.config.model,store:false,background:true,
-        instructions:DNA_ANALYSIS_INSTRUCTIONS,
+        instructions:DNA_ANALYSIS_INSTRUCTIONS+WINNER_REPORT_INSTRUCTIONS,
         input:[{role:"user",content:[{type:"input_text",text:JSON.stringify({operationKey:context.operationKey,reference:safeInput})},...images]}],
-        text:{format:{type:"json_schema",name:"koolezt_creative_dna",strict:true,schema:dnaSchema}}
+        text:{format:{type:"json_schema",name:"koolezt_creative_dna",strict:true,schema:dnaAnalysisSchema}}
       },{timeout:this.config.strategyTransportTimeoutMs??30000});
       return this.strategyResponse(response);
     } catch(error) {
