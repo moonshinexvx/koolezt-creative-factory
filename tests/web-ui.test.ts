@@ -15,7 +15,6 @@ describe("winner-to-video web app", () => {
     expect(make).toContain("/api/creative-references/${referenceId}/video-plans");
     expect(make).toContain("/api/video-batches/${batch.id}/make");
     expect(make).toContain("Make this video");
-    expect(make).toContain("2 PM and 4 PM Vietnam time");
     const winners = await source("winners.tsx");
     expect(winners).toContain("<MakeVideos referenceId={reference.id}");
     expect(winners).not.toContain("Open campaign with this winner");

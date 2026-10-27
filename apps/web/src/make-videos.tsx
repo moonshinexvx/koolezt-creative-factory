@@ -53,7 +53,7 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
   return <section className="card make-videos">
     <h3>Make new videos from this winner</h3>
     {!reportReady ? <p className="muted">Available once the analysis report is ready.</p> : <>
-      <p className="muted">Claude writes video plans that keep what made this ad work and change one thing each. You choose which ones to make; videos are built from your product photos with captions and an AI voiceover. Team rule: make videos between 2 PM and 4 PM Vietnam time.</p>
+      <p className="muted">Claude writes video plans that keep what made this ad work and change one thing each. You choose which ones to make; videos are built from your product photos with captions and an AI voiceover.</p>
       <div className="make-controls">
         <label>How many<select value={count} onChange={(event) => setCount(Number(event.target.value) as 3 | 6 | 12)}><option value={3}>3 videos</option><option value={6}>6 videos</option><option value={12}>12 videos</option></select></label>
         <label>Length<select value={length} onChange={(event) => setLength(Number(event.target.value) as 15 | 30)}><option value={15}>15 seconds</option><option value={30}>30 seconds</option></select></label>
