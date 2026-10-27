@@ -195,12 +195,12 @@ describe("create-project browser workflow", () => {
     expect(source).toContain("Winner Analysis");
     expect(source).toContain("Concepts");
     expect(source).toContain("Campaign Product References");
-    expect(source).toContain("Campaign Product Visual Authority");
+    expect(source).toContain("Product look rules");
     expect(source).toContain("Approved winners for this Product from <a href=\"/winners\">Winner Analysis</a> are available.");
     expect(source).not.toContain("/api/creative-references?projectId=");
     expect(source).toContain("/api/creative-references/approved?projectId=");
     expect(source).toContain("Make Primary");
-    expect(source).toContain("Existing immutable snapshots and historical executions are never rewritten.");
+    expect(source).toContain("Videos already made don't change.");
     expect(source).toContain("campaignWorkspaceView ? campaignTabs : executionTabs");
     expect(source).toContain('className="campaign-chevron-button"');
     expect(source).not.toContain("campaign-tool-actions");
@@ -209,7 +209,7 @@ describe("create-project browser workflow", () => {
     expect(source).toContain("refresher.current!.cancel()");
     expect(source).toContain("concept-scene-");
     expect(source).toContain("Approve Concept & Continue");
-    expect(source).toContain("Canonical Product Reference");
+    expect(source).toContain("Exact product photo");
     expect(source).toContain("Background-only image prompt");
     expect(source).toContain("Upload Final Composite Context Image");
     expect(source).toContain("productFidelityConfirmed: true");
@@ -220,7 +220,7 @@ describe("create-project browser workflow", () => {
     expect(source).toContain('generationMethod: "manual"');
     expect(source).toContain("Approving…");
     expect(source).toContain("Planned Scenes");
-    expect(source).toContain("Discard Concept and Regenerate");
+    expect(source).toContain("Discard and create a new plan");
     expect(source).toContain("/api/projects/${projectId}");
     const draft = { requestId, name: "", creativeTopic: "", productDetails: "", targetDurationSeconds: 15 };
     expect(validateNewProject(draft, [])).toBe("Product / Project Name is required.");

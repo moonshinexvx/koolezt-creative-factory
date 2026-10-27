@@ -22,7 +22,7 @@ const money = (value: number, currency?: string) => `${currency && currency !== 
 function statusOf(entry: any): Readonly<{ label: string; tone: "working" | "ready" | "failed" | "idle" }> {
   const report = entry.winnerReport;
   if (entry.reference.analysisStatus === "ANALYZING" || report?.status === "PENDING") return { label: "Analyzing", tone: "working" };
-  if (report?.status === "READY") return { label: entry.reference.analysisStatus === "APPROVED" ? "Report ready · DNA approved" : "Report ready", tone: "ready" };
+  if (report?.status === "READY") return { label: entry.reference.analysisStatus === "APPROVED" ? "Report ready · Approved for new ideas" : "Report ready", tone: "ready" };
   if (report?.status === "FAILED" || ["FAILED", "SUBMISSION_UNKNOWN", "RESULT_UNAVAILABLE"].includes(entry.reference.analysisStatus)) return { label: "Needs attention", tone: "failed" };
   return { label: entry.reference.analysisStatus === "NOT_ANALYZED" ? "Not analyzed" : "No report yet", tone: "idle" };
 }
@@ -70,7 +70,7 @@ function TimelineStrip({ report, measurements, durationMs, onSeek }: Readonly<{ 
   </div>;
 }
 
-function Stat({ label, value, note }: Readonly<{ label: string; value: string | undefined; note?: string }>) {
+function Stat({ label, value, note }: Readonly<{ label: string; value: string | undefined; note?: string | undefined }>) {
   return value === undefined ? null : <div className="stat-tile"><span>{label}</span><b>{value}</b>{note && <small>{note}</small>}</div>;
 }
 
@@ -218,13 +218,13 @@ function WinnerReportView({ entry, campaigns, working, onRegenerate, onAnalyze, 
 
     {latest && <section className="card dna-section"><h3>Use this winner for new creatives</h3>
       {approved ? <>
-        <p>Approved DNA revision {approved.revision} guides new concepts for {entry.productName ?? "this product"}.</p>
+        <p>Approved. This winner now guides new ideas for {entry.productName ?? "this product"}.</p>
         {campaigns.length ? <div className="use-in-campaign"><select value={campaignId} onChange={(event) => setCampaignId(event.target.value)}><option value="">Choose a campaign…</option>{campaigns.map((campaign: any) => <option key={campaign.id} value={campaign.id}>{campaign.publicId} · {campaign.creativeTopic ?? "Campaign"}</option>)}</select><button className="primary" disabled={!campaignId} onClick={() => onUseInCampaign(campaigns.find((campaign: any) => campaign.id === campaignId), approved.id)}>Open campaign with this winner</button></div> : <p className="muted">Create a campaign for this product to use this winner.</p>}
-      </> : <p>Review the generation DNA below and approve it to use this winner when creating concepts.</p>}
-      <details><summary>Generation DNA (revision {latest.revision}, {latest.status.toLowerCase()})</summary>
-        <p className="muted small">These structured rules are what the concept generator receives. Edit the JSON to correct them; saving creates a new revision.</p>
+      </> : <p>Approve this winner to let it guide new ideas. You can check its rules below first.</p>}
+      <details><summary>Rules the AI learned from this ad (version {latest.revision}, {latest.status.toLowerCase()})</summary>
+        <p className="muted small">These are the rules the AI follows when it creates new ideas from this winner. Advanced: edit the text to correct them; saving creates a new version.</p>
         <textarea rows={14} value={dnaText ?? editableDna} onChange={(event) => setDnaText(event.target.value)} />
-        <div className="winner-actions"><button disabled={working || dnaText === undefined} onClick={() => { onSaveDna(dnaText!); setDnaText(undefined); }}>Save edits as new revision</button>{latest.status !== "APPROVED" && <button className="primary" disabled={working} onClick={() => onApprove(latest.id)}>Approve DNA revision {latest.revision}</button>}</div>
+        <div className="winner-actions"><button disabled={working || dnaText === undefined} onClick={() => { onSaveDna(dnaText!); setDnaText(undefined); }}>Save as new version</button>{latest.status !== "APPROVED" && <button className="primary" disabled={working} onClick={() => onApprove(latest.id)}>Approve this winner</button>}</div>
       </details>
     </section>}
   </article>;
@@ -399,12 +399,12 @@ export function WinnerAnalysis({ sidebar, products, projects, isOwner, onUseInCa
       : selected ? <WinnerReportView key={selected.reference.id} entry={selected} campaigns={campaignsFor(selected.reference.productId)} working={working}
         onAnalyze={() => void run(() => api(`/api/creative-references/${selected.reference.id}/analyze`, "POST", { requestId: crypto.randomUUID() }), "Could not start the analysis.")}
         onRegenerate={() => void run(() => api(`/api/creative-references/${selected.reference.id}/analyze`, "POST", { requestId: crypto.randomUUID(), mode: "REPORT" }), "Could not start the report.")}
-        onApprove={(revisionId) => void run(() => api(`/api/creative-references/${selected.reference.id}/dna/${revisionId}/approve`, "POST", {}), "Could not approve the DNA revision.")}
-        onSaveDna={(text) => void run(async () => api(`/api/creative-references/${selected.reference.id}/dna`, "PUT", JSON.parse(text)), "Could not save the DNA revision.")}
+        onApprove={(revisionId) => void run(() => api(`/api/creative-references/${selected.reference.id}/dna/${revisionId}/approve`, "POST", {}), "Could not approve this winner.")}
+        onSaveDna={(text) => void run(async () => api(`/api/creative-references/${selected.reference.id}/dna`, "PUT", JSON.parse(text)), "Could not save the rules.")}
         onUseInCampaign={onUseInCampaign}
         onRefreshMeta={() => void run(() => api(`/api/creative-references/${selected.reference.id}/meta/refresh`, "POST", {}), "Could not refresh from Meta.")}
         {...(isOwner ? { onDelete: () => {
-          if (!window.confirm(`Delete "${selected.reference.displayName}" from Winner Analysis?\n\nIt disappears from this page and from campaign winner lists. Campaigns that already used its DNA keep their copy. An administrator can restore it.`)) return;
+          if (!window.confirm(`Delete "${selected.reference.displayName}" from Winner Analysis?\n\nIt disappears from this page and from campaign winner lists. Campaigns that already used it keep their copy. An administrator can restore it.`)) return;
           void run(async () => { await api(`/api/creative-references/${selected.reference.id}`, "DELETE"); setSelectedId(undefined); history.replaceState({}, "", "/winners"); setNotice(`Deleted "${selected.reference.displayName}".`); }, "Could not delete this winner.");
         } } : {})} />
       : <section className="card"><h2>Winner Analysis</h2><p>Upload a winning ad to see why it worked: the hook, angle, beat-by-beat timeline, voiceover, editing, claims check, and a brief for your next creatives.</p><button className="primary" onClick={() => setShowUpload(true)}>+ Add winner</button></section>}

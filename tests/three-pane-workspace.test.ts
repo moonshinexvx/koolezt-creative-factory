@@ -35,7 +35,7 @@ describe("three-pane creative workspace", () => {
     expect(source).toContain("creative-package-grid");
     expect(source).toContain("variant-voice-grid");
     expect(source).toContain("Voice style for next generation");
-    expect(source).toContain("schedule its variant MP4s for cleanup");
+    expect(source).toContain("delete this batch and its videos");
   });
 
   it("moves winning-creative upload and analysis to the Winner Analysis page", async () => {

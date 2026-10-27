@@ -36,9 +36,9 @@ describe("Creative Strategy HTTP and operator UI", () => {
     expect(source).toContain("batch.requestedCount");
     expect(source).toContain("activeStrategyOperation");
     expect(source).toContain("Refresh Status");
-    expect(source).toContain("Automatic retry is disabled");
-    expect(source).toContain("Automatic resubmission is disabled");
-    expect(source).toContain("Replace Flagged Concepts (OpenAI)");
+    expect(source).toContain("It won't retry by itself");
+    expect(source).toContain("The AI's answer is no longer available");
+    expect(source).toContain("Replace flagged ideas (paid AI)");
     expect(source).toContain("Send Selected to Video Maker");
     expect(source).toContain("Create New Video Maker Project");
     expect(source).toContain("sendStrategiesToVideoMaker(batch.id, selectedForBatch)");
@@ -46,9 +46,9 @@ describe("Creative Strategy HTTP and operator UI", () => {
     expect(source).not.toContain('disabled={!ready || batch.status === "HANDED_OFF"');
     expect(source).not.toContain('disabled={strategyWorking || batch.status === "HANDED_OFF"');
     expect(source).toContain("selectedForBatch.length >= 3");
-    expect(source).toContain("These Campaign inputs are shared authority");
-    expect(source).toContain("Allowed Product configurations");
-    expect(source).toContain("An allowed configuration must also be supported by a verified Product claim");
+    expect(source).toContain("These settings apply to every project in this campaign");
+    expect(source).toContain("Ways it can be shown installed");
+    expect(source).toContain("Each installation way must also appear in the facts list");
     expect(source).toContain("campaignWorkspaceView ? campaignTabs : executionTabs");
   });
 });
