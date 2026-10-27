@@ -149,4 +149,22 @@ describe("winner to videos", () => {
       expect(Number(probe.format.duration)).toBeGreaterThanOrEqual(14.5);
     } finally { await setup.dispose(); }
   }, 120_000);
+
+  it("lets the owner change a plan's photos and scenes, and keeps edits off videos being made", async () => {
+    const setup = await harness();
+    try {
+      await setup.dnaService.requestAnalysis(setup.reference.id, crypto.randomUUID());
+      await setup.drain();
+      await setup.service.requestPlans({ referenceId: setup.reference.id, count: 3, durationSeconds: 15, actor: "owner" });
+      await setup.drain();
+      const [first] = await setup.videos.listVideos();
+      const scenes = [{ photoAssetId: setup.photo.id, motion: "PAN_LEFT" as const, caption: "My own caption", durationMs: 4000 }, { photoAssetId: setup.photo.id, motion: "ZOOM_OUT" as const, caption: "", durationMs: 2000 }];
+      const edited = await setup.service.editPlan(first!.id, { ...first!.plan, title: "Edited", scenes });
+      expect((await setup.videos.getVideo(first!.id)).plan).toMatchObject({ title: "Edited", scenes });
+      expect(edited.status).toBe("PLANNED");
+      await expect(setup.service.editPlan(first!.id, { ...first!.plan, scenes: [{ ...scenes[0]!, photoAssetId: crypto.randomUUID() }, scenes[1]!] })).rejects.toMatchObject({ code: "VIDEO_PHOTO_MISSING" });
+      await setup.service.makeVideos(first!.batchId, [first!.id]);
+      await expect(setup.service.editPlan(first!.id, edited.plan)).rejects.toMatchObject({ code: "VIDEO_BUSY" });
+    } finally { await setup.dispose(); }
+  });
 });

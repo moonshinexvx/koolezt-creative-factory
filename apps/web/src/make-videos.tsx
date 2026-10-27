@@ -5,15 +5,60 @@ const motionLabel: Record<string, string> = { ZOOM_IN: "slow zoom in", ZOOM_OUT:
 const statusLabel: Record<string, string> = { PLANNED: "Plan", QUEUED: "Waiting to be made", RENDERING: "Making video…", READY: "Video ready", FAILED: "Failed" };
 const seconds = (ms: number) => `${Math.round(ms / 100) / 10}s`;
 
-function PlanCard({ video, selected, onToggle }: Readonly<{ video: any; selected: boolean; onToggle: () => void }>) {
+/** Lets the owner change a plan before making it: photo, caption, length and motion of each scene, scene order, and the words. */
+function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any; photos: readonly any[]; onSaved: () => Promise<void>; onCancel: () => void }>) {
+  const [draft, setDraft] = useState<any>(() => structuredClone(video.plan));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const set = (field: string, value: unknown) => setDraft((current: any) => ({ ...current, [field]: value }));
+  const setScene = (index: number, field: string, value: unknown) => set("scenes", draft.scenes.map((scene: any, at: number) => at === index ? { ...scene, [field]: value } : scene));
+  const move = (index: number, step: number) => {
+    const scenes = [...draft.scenes];
+    const [scene] = scenes.splice(index, 1);
+    scenes.splice(index + step, 0, scene);
+    set("scenes", scenes);
+  };
+  const save = async () => {
+    setSaving(true); setError("");
+    try { await api(`/api/videos/${video.id}/plan`, "PUT", draft); await onSaved(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not save the plan."); } finally { setSaving(false); }
+  };
+  return <article className="plan-card plan-editor">
+    <label>Title<input value={draft.title} maxLength={120} onChange={(event) => set("title", event.target.value)} /></label>
+    <label>Hook (first 3s, on screen)<input value={draft.hookText} maxLength={60} onChange={(event) => set("hookText", event.target.value)} /></label>
+    <label>Voiceover<textarea rows={4} value={draft.voiceover} maxLength={900} onChange={(event) => set("voiceover", event.target.value)} /></label>
+    <label>Call to action (last scene)<input value={draft.ctaText} maxLength={40} onChange={(event) => set("ctaText", event.target.value)} /></label>
+    <b>Scenes</b>
+    <ol className="scene-editor">{draft.scenes.map((scene: any, index: number) => <li key={index}>
+      <div className="scene-photos">{photos.map((photo: any) => <button type="button" key={photo.id} className={photo.id === scene.photoAssetId ? "chosen" : ""} title={photo.label} onClick={() => setScene(index, "photoAssetId", photo.id)}><img src={`/api/assets/${photo.id}`} alt={photo.label} /></button>)}</div>
+      <label>Caption<input value={scene.caption} maxLength={80} onChange={(event) => setScene(index, "caption", event.target.value)} /></label>
+      <div className="scene-row">
+        <label>Seconds<input type="number" min={1} max={15} step={0.5} value={scene.durationMs / 1000} onChange={(event) => setScene(index, "durationMs", Math.round(Math.min(15, Math.max(1, Number(event.target.value) || 1)) * 1000))} /></label>
+        <label>Motion<select value={scene.motion} onChange={(event) => setScene(index, "motion", event.target.value)}>{Object.entries(motionLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      </div>
+      <div className="scene-row">
+        <button type="button" disabled={index === 0} onClick={() => move(index, -1)}>↑ Up</button>
+        <button type="button" disabled={index === draft.scenes.length - 1} onClick={() => move(index, 1)}>↓ Down</button>
+        <button type="button" className="danger" disabled={draft.scenes.length <= 2} onClick={() => set("scenes", draft.scenes.filter((_: any, at: number) => at !== index))}>Remove</button>
+      </div>
+    </li>)}</ol>
+    <button type="button" disabled={draft.scenes.length >= 8} onClick={() => set("scenes", [...draft.scenes, { ...draft.scenes.at(-1), caption: "" }])}>+ Add scene</button>
+    <p className="muted small">Seconds set how long each scene lasts compared with the others; the video is stretched to fit the voiceover.</p>
+    {error && <p className="error small" role="alert">{error}</p>}
+    <div className="scene-row"><button className="primary" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Save plan"}</button><button type="button" disabled={saving} onClick={onCancel}>Cancel</button></div>
+  </article>;
+}
+
+function PlanCard({ video, selected, onToggle, onEdit }: Readonly<{ video: any; selected: boolean; onToggle: () => void; onEdit: () => void }>) {
   const plan = video.plan;
   const selectable = video.status === "PLANNED" || video.status === "FAILED";
+  const editable = selectable || video.status === "READY";
   return <article className={`plan-card ${video.status.toLowerCase()} ${selected ? "selected" : ""}`}>
     <header>
       {selectable ? <label className="plan-select"><input type="checkbox" checked={selected} onChange={onToggle} /> Make this video</label> : <span className={`plan-status ${video.status.toLowerCase()}`}>{statusLabel[video.status] ?? video.status}</span>}
       <h4>{video.ordinal}. {plan.title}</h4>
     </header>
     {video.status === "READY" && video.outputAssetId && <div className="plan-video"><video controls preload="metadata" src={`/api/assets/${video.outputAssetId}`} /><a className="button primary" href={`/api/videos/${video.id}/download`}>Download MP4</a></div>}
+    {video.status === "PLANNED" && video.outputAssetId && <div className="plan-video"><small className="muted">Video from before your edits (make it again to update):</small><video controls preload="metadata" src={`/api/assets/${video.outputAssetId}`} /></div>}
     {video.status === "FAILED" && video.failureMessage && <p className="error small">{video.failureMessage}</p>}
     <dl>
       <dt>Keeps from the winner</dt><dd>{plan.keepsFromWinner || "—"}</dd>
@@ -25,6 +70,7 @@ function PlanCard({ video, selected, onToggle }: Readonly<{ video: any; selected
       <p className="voiceover">"{plan.voiceover}"</p>
       <ol className="plan-scenes">{plan.scenes.map((scene: any, index: number) => <li key={index}><img src={`/api/assets/${scene.photoAssetId}`} alt="" /><div><b>{scene.caption || "No caption"}</b><small>{seconds(scene.durationMs)} · {motionLabel[scene.motion] ?? scene.motion}</small></div></li>)}</ol>
     </details>
+    {editable && <button type="button" onClick={onEdit}>{video.status === "READY" ? "Edit and make again" : "Edit photos and scenes"}</button>}
   </article>;
 }
 
@@ -36,7 +82,11 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
   const [selected, setSelected] = useState<string[]>([]);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const [editing, setEditing] = useState("");
+  const [products, setProducts] = useState<any[]>([]);
   const load = useCallback(async () => setBatches(await api(`/api/video-batches?referenceId=${encodeURIComponent(referenceId)}`)), [referenceId]);
+  useEffect(() => { void api("/api/products").then(setProducts).catch(() => undefined); }, []);
+  const photosOf = (productId: string) => (products.find((product: any) => product.id === productId)?.assets ?? []).filter((asset: any) => asset.kind === "IMAGE");
   useEffect(() => { void load().catch((reason) => setError(reason instanceof Error ? reason.message : "Could not load videos.")); }, [load]);
   const busy = batches.some((entry) => entry.batch.status === "WRITING" || entry.videos.some((video: any) => video.status === "QUEUED" || video.status === "RENDERING"));
   useEffect(() => {
@@ -68,7 +118,9 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
         {batch.status === "WRITING" && <p className="muted">Claude is writing {batch.requestedCount} plans. This usually takes 1–2 minutes and refreshes automatically.</p>}
         {batch.status === "FAILED" && <p className="error">Writing these plans failed: {batch.failureMessage ?? "unknown error"}. Start a new set to try again.</p>}
         {batch.status === "READY" && <>
-          <div className="plan-grid">{videos.map((video: any) => <PlanCard key={video.id} video={video} selected={selected.includes(video.id)} onToggle={() => setSelected((current) => current.includes(video.id) ? current.filter((id) => id !== video.id) : [...current, video.id])} />)}</div>
+          <div className="plan-grid">{videos.map((video: any) => editing === video.id
+            ? <PlanEditor key={video.id} video={video} photos={photosOf(batch.productId)} onCancel={() => setEditing("")} onSaved={async () => { setEditing(""); await load(); }} />
+            : <PlanCard key={video.id} video={video} selected={selected.includes(video.id)} onEdit={() => setEditing(video.id)} onToggle={() => setSelected((current) => current.includes(video.id) ? current.filter((id) => id !== video.id) : [...current, video.id])} />)}</div>
           <div className="winner-actions"><button className="primary" disabled={working || !chosen.length} onClick={() => void run(async () => { await api(`/api/video-batches/${batch.id}/make`, "POST", { videoIds: chosen.map((video: any) => video.id) }); setSelected((current) => current.filter((id) => !chosen.some((video: any) => video.id === id))); }, "Could not start making videos.")}>Make {chosen.length || ""} selected video{chosen.length === 1 ? "" : "s"}</button><span className="muted small">Each video takes about 20–40 seconds to make, one after another.</span></div>
         </>}
       </div>;

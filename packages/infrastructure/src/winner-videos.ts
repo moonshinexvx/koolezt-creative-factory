@@ -67,7 +67,7 @@ export class PostgresWinnerVideoStore implements WinnerVideoRepository {
     for (const v of videos) await this.pool.query(`INSERT INTO winner_videos(id,batch_id,ordinal,plan,status,created_at,updated_at) VALUES($1,$2,$3,$4::jsonb,$5,$6,$7)`, [v.id, v.batchId, v.ordinal, JSON.stringify(v.plan), v.status, v.createdAt, v.updatedAt]);
   }
   async updateVideo(v: WinnerVideo): Promise<void> {
-    await this.pool.query("UPDATE winner_videos SET status=$2,output_asset_id=$3,duration_ms=$4,failure_message=$5,updated_at=$6 WHERE id=$1", [v.id, v.status, v.outputAssetId ?? null, v.durationMs ?? null, v.failureMessage?.slice(0, 500) ?? null, v.updatedAt]);
+    await this.pool.query("UPDATE winner_videos SET status=$2,output_asset_id=$3,duration_ms=$4,failure_message=$5,updated_at=$6,plan=$7::jsonb WHERE id=$1", [v.id, v.status, v.outputAssetId ?? null, v.durationMs ?? null, v.failureMessage?.slice(0, 500) ?? null, v.updatedAt, JSON.stringify(v.plan)]);
   }
   async getVideo(id: string): Promise<WinnerVideo> {
     const q = await this.pool.query("SELECT * FROM winner_videos WHERE id=$1", [id]);

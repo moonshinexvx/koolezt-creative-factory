@@ -54,9 +54,9 @@ export class WinnerVideoService {
   private now() { return (this.d.now ?? (() => new Date()))().toISOString(); }
   private id() { return (this.d.id ?? randomUUID)(); }
 
-  private async productPhotos(productId: string) {
+  private async productPhotos(productId: string, limit = MAX_PHOTOS) {
     const product = await this.d.repository.getProduct(productId);
-    return { product, photos: product.assets.filter((asset) => asset.kind === "IMAGE").slice(0, MAX_PHOTOS) };
+    return { product, photos: product.assets.filter((asset) => asset.kind === "IMAGE").slice(0, limit) };
   }
 
   /** Starts writing new video plans from an analyzed winner. Writing runs in the worker; it costs one AI call. */
@@ -106,6 +106,20 @@ export class WinnerVideoService {
       await this.d.videos.updateBatch({ ...batch, status: "FAILED", failureMessage: message.slice(0, 500), updatedAt: this.now() });
       return { status: "FAILED", lastError: message };
     }
+  }
+
+  /** Saves the owner's changes to a plan (photos, captions, scene order, voiceover). A made video goes back to "Plan" until it is made again. */
+  async editPlan(videoId: string, plan: VideoPlan): Promise<WinnerVideo> {
+    const video = await this.d.videos.getVideo(videoId);
+    if (video.status === "QUEUED" || video.status === "RENDERING") throw new DomainError("VIDEO_BUSY", "This video is being made. Edit it after it finishes.");
+    const batch = await this.d.videos.getBatch(video.batchId);
+    const { photos } = await this.productPhotos(batch.productId, Number.POSITIVE_INFINITY);
+    if (plan.scenes.some((scene) => !photos.some((photo) => photo.id === scene.photoAssetId))) throw new DomainError("VIDEO_PHOTO_MISSING", "Choose each scene's photo from this product's photos.");
+    const { failureMessage: _f, ...rest } = video;
+    void _f;
+    const edited: WinnerVideo = { ...rest, plan, status: "PLANNED", updatedAt: this.now() };
+    await this.d.videos.updateVideo(edited);
+    return edited;
   }
 
   /** Queues the chosen plans for rendering; each video is voiced and rendered on the server one at a time. */
