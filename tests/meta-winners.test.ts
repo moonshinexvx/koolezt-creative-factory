@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CreativeDnaService, CreativeFactoryService, isMetaVideoUrl, MetaWinnerService, performanceFromMeta } from "@koolezt/application";
-import { InMemoryCreativeDnaStore, InMemoryCreativeStrategyStore, InMemoryFactoryRepository } from "@koolezt/infrastructure";
+import { calendarDay, InMemoryCreativeDnaStore, InMemoryCreativeStrategyStore, InMemoryFactoryRepository } from "@koolezt/infrastructure";
 import { FakeExternalMediaDeliveryProvider, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, MetadataMediaInspector } from "@koolezt/media";
 import { FakeCompositionProvider, FakeCreativeProvider, FakeVideoGenerationProvider, FakeVoiceProvider, HttpMetaAdsGateway, metaAdMetrics, normalizeAdAccountId } from "@koolezt/providers";
 import type { CreativeDnaPreprocessor, MetaAdsGateway, MetaAdSummary } from "@koolezt/domain";
@@ -35,6 +35,15 @@ describe("Meta ad metrics", () => {
     expect(isMetaVideoUrl("https://169.254.169.254/latest")).toBe(false);
     expect(normalizeAdAccountId("1234567890")).toBe("act_1234567890");
     expect(() => normalizeAdAccountId("act_12ab")).toThrow();
+  });
+});
+
+describe("Postgres DATE values", () => {
+  it("round-trip as the stored calendar day in any server time zone", () => {
+    // pg parses DATE columns as local midnight; String() or toISOString() would corrupt them.
+    expect(calendarDay(new Date(2026, 8, 30))).toBe("2026-09-30");
+    expect(calendarDay(new Date(2026, 0, 1))).toBe("2026-01-01");
+    expect(calendarDay("2026-10-27")).toBe("2026-10-27");
   });
 });
 

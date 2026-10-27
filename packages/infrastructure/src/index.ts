@@ -34,7 +34,7 @@ export { PostgresProjectArchiveStore } from "./project-archive.js";
 export { PostgresVariantCreativePackageStore } from "./variant-creative-packages.js";
 export { PostgresCreativeStrategyStore } from "./creative-strategy.js";
 export { InMemoryCreativeStrategyStore } from "./creative-strategy-memory.js";
-export { PostgresCreativeDnaStore, InMemoryCreativeDnaStore } from "./creative-dna.js";
+export { calendarDay, PostgresCreativeDnaStore, InMemoryCreativeDnaStore } from "./creative-dna.js";
 export type { VariantBatch, VariantBatchStatus, CreativeVariant, CreativeVariantStatus } from "./variant-factory.js";
 export type { VariantCreativePackage, VariantPackageRevision, VariantPackageVoice, VariantPackageVoiceStatus, VariantPackageSource } from "./variant-creative-packages.js";
 export type { RenderWorkerEnrollment, RenderWorkerEnrollmentResult, RenderWorkerIdentity, RenderWorkerIdentityStore } from "./render-worker-auth.js";
