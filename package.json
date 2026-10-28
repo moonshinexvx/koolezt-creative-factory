@@ -22,6 +22,7 @@
     "smoke:production": "tsx scripts/production-smoke.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:migrate:dry-run": "tsx scripts/migration-dry-run.ts",
+    "media:reset": "tsx scripts/reset-media.ts",
     "test:claude-smoke": "tsx scripts/claude-smoke.ts",
     "test:openai-smoke": "tsx scripts/openai-smoke.ts",
     "test:openai-voice-smoke": "tsx scripts/openai-voice-smoke.ts",
