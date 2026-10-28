@@ -25,6 +25,8 @@ try {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      // A winner points at its approved analysis and the analysis points back, so break that link first.
+      await client.query("UPDATE creative_references SET approved_revision_id = NULL");
       for (const table of tables) await client.query(`DELETE FROM ${table}`);
       await client.query("COMMIT");
     } catch (error) {
