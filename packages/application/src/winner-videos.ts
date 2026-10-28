@@ -3,13 +3,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
 import { DomainError, VIDEO_PLAN_MOTIONS, VIDEO_PLAN_STYLES } from "@koolezt/domain";
-import type { CreativeDnaRepository, CreativeProvider, FactoryRepository, StorageProvider, VideoPlan, VideoPlanMotion, VideoPlanStyle, VoiceProvider, WinnerJob, WinnerJobRepository, WinnerVideo, WinnerVideoBatch, WinnerVideoRepository } from "@koolezt/domain";
+import type { CreativeDnaRepository, CreativeProvider, FactoryRepository, SceneImageProvider, StorageProvider, VideoPlan, VideoPlanMotion, VideoPlanScene, VideoPlanStyle, VoiceProvider, WinnerJob, WinnerJobRepository, WinnerVideo, WinnerVideoBatch, WinnerVideoRepository } from "@koolezt/domain";
 
 /** The renderer the service needs; implemented by PlanVideoRenderer in @koolezt/media. */
 export interface VideoRenderer {
   probe(path: string): Promise<Readonly<{ width?: number; height?: number; durationMs?: number }>>;
   render(input: Readonly<{
-    scenes: readonly Readonly<{ photoPath: string; photoWidth: number; photoHeight: number; motion: VideoPlanMotion; caption: string; durationMs: number }>[];
+    scenes: readonly Readonly<{ photoPath: string; photoWidth: number; photoHeight: number; motion: VideoPlanMotion; caption: string; durationMs: number; fullFrame?: boolean }>[];
     hookText: string; ctaText: string; voicePath: string; voiceDurationMs: number; targetDurationMs: number; style?: VideoPlanStyle;
   }>): Promise<Readonly<{ bytes: Uint8Array; durationMs: number }>>;
 }
@@ -18,6 +18,10 @@ export type JobOutcome = Readonly<{ status: "COMPLETED" | "FAILED" | "PENDING"; 
 
 const MAX_PHOTOS = 8;
 const MAX_RENDER_ATTEMPTS = 4;
+const SCENE_IMAGE_CONCURRENCY = 4;
+/** The scene without its AI image state (status, error, and the image itself). */
+const plainScene = (scene: VideoPlanScene): VideoPlanScene => ({ photoAssetId: scene.photoAssetId, motion: scene.motion, caption: scene.caption, durationMs: scene.durationMs, ...(scene.imagePrompt !== undefined ? { imagePrompt: scene.imagePrompt } : {}), ...(scene.videoPrompt !== undefined ? { videoPrompt: scene.videoPrompt } : {}) });
+const generating = (video: WinnerVideo) => video.plan.scenes.some((scene) => scene.imageStatus === "GENERATING");
 type Raw = Record<string, unknown>;
 const text = (value: unknown, max: number) => (typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, max) : "");
 const words = (value: string, max: number) => value.split(" ").filter(Boolean).slice(0, max).join(" ");
@@ -51,7 +55,7 @@ const batchStyle = (batch: WinnerVideoBatch): VideoPlanStyle => VIDEO_PLAN_STYLE
 export class WinnerVideoService {
   constructor(private readonly d: Readonly<{
     repository: FactoryRepository; dna: CreativeDnaRepository; videos: WinnerVideoRepository; jobs: WinnerJobRepository;
-    provider: CreativeProvider; voice: VoiceProvider; storage: StorageProvider; renderer: VideoRenderer;
+    provider: CreativeProvider; voice: VoiceProvider; storage: StorageProvider; renderer: VideoRenderer; sceneImages?: SceneImageProvider;
     voiceProfileId?: string; maxLoadAverage?: number; loadAverage?: () => number; now?: () => Date; id?: () => string;
   }>) {}
 
@@ -117,14 +121,64 @@ export class WinnerVideoService {
   async editPlan(videoId: string, plan: VideoPlan): Promise<WinnerVideo> {
     const video = await this.d.videos.getVideo(videoId);
     if (video.status === "QUEUED" || video.status === "RENDERING") throw new DomainError("VIDEO_BUSY", "This video is being made. Edit it after it finishes.");
+    if (generating(video)) throw new DomainError("SCENE_IMAGES_IN_PROGRESS", "AI scene images are being made for this plan. Edit it after they finish.");
     const batch = await this.d.videos.getBatch(video.batchId);
     const { photos } = await this.productPhotos(batch.productId, Number.POSITIVE_INFINITY);
     if (plan.scenes.some((scene) => !photos.some((photo) => photo.id === scene.photoAssetId))) throw new DomainError("VIDEO_PHOTO_MISSING", "Choose each scene's photo from this product's photos.");
     const { failureMessage: _f, ...rest } = video;
     void _f;
-    const edited: WinnerVideo = { ...rest, plan, status: "PLANNED", updatedAt: this.now() };
+    // Only images this plan already made may be kept; anything else falls back to the product photo.
+    const known = new Set(video.plan.scenes.flatMap((scene) => scene.sceneImageAssetId ? [scene.sceneImageAssetId] : []));
+    const scenes = plan.scenes.map((scene) => scene.sceneImageAssetId && known.has(scene.sceneImageAssetId) ? { ...plainScene(scene), sceneImageAssetId: scene.sceneImageAssetId, imageStatus: "READY" as const } : plainScene(scene));
+    const edited: WinnerVideo = { ...rest, plan: { ...plan, scenes }, status: "PLANNED", updatedAt: this.now() };
     await this.d.videos.updateVideo(edited);
     return edited;
+  }
+
+  /** Starts making AI scene images (OpenAI, from each scene's image prompt and the main product photo). One paid image per scene; never retried automatically. */
+  async requestSceneImages(videoId: string, sceneIndexes?: readonly number[]): Promise<WinnerVideo> {
+    if (!this.d.sceneImages) throw new DomainError("SCENE_IMAGES_UNAVAILABLE", "AI scene images need OPENAI_API_KEY on the server.");
+    const video = await this.d.videos.getVideo(videoId);
+    if (video.status === "QUEUED" || video.status === "RENDERING") throw new DomainError("VIDEO_BUSY", "This video is being made. Try again after it finishes.");
+    if (generating(video)) throw new DomainError("SCENE_IMAGES_IN_PROGRESS", "AI scene images are already being made for this plan.");
+    const wanted = new Set(sceneIndexes?.length ? sceneIndexes : video.plan.scenes.map((_, index) => index));
+    const missing = video.plan.scenes.findIndex((scene, index) => wanted.has(index) && !scene.imagePrompt?.trim());
+    if (missing >= 0) throw new DomainError("SCENE_IMAGE_PROMPT_REQUIRED", `Scene ${missing + 1} has no image prompt. Add one with Edit first.`);
+    if (![...wanted].some((index) => index >= 0 && index < video.plan.scenes.length)) throw new DomainError("SCENE_IMAGE_PROMPT_REQUIRED", "Choose at least one scene.");
+    const scenes = video.plan.scenes.map((scene, index) => wanted.has(index) ? { ...plainScene(scene), ...(scene.sceneImageAssetId ? { sceneImageAssetId: scene.sceneImageAssetId } : {}), imageStatus: "GENERATING" as const } : scene);
+    const now = this.now();
+    const updated: WinnerVideo = { ...video, plan: { ...video.plan, scenes }, updatedAt: now };
+    await this.d.videos.updateVideo(updated);
+    await this.d.jobs.enqueue({ id: this.id(), kind: "GENERATE_SCENE_IMAGES", targetId: video.id, operationKey: `scene-images:${video.id}:${randomUUID()}`, status: "PENDING", attempts: 0, createdAt: now, updatedAt: now });
+    return updated;
+  }
+
+  async generateSceneImages(job: WinnerJob): Promise<JobOutcome> {
+    const video = await this.d.videos.getVideo(job.targetId);
+    if (!generating(video)) return { status: "COMPLETED" };
+    const batch = await this.d.videos.getBatch(video.batchId);
+    const { photos } = await this.productPhotos(batch.productId, 1);
+    const main = photos[0];
+    const reference = main && this.d.sceneImages ? { bytes: await this.d.storage.read(main.storageKey), mimeType: main.mimeType } : undefined;
+    const scenes = [...video.plan.scenes];
+    const make = async (index: number) => {
+      const scene = plainScene(scenes[index]!);
+      try {
+        if (!this.d.sceneImages) throw new DomainError("SCENE_IMAGES_UNAVAILABLE", "AI scene images need OPENAI_API_KEY on the server.");
+        if (!reference) throw new DomainError("PRODUCT_PHOTOS_REQUIRED", "Add a main product photo first.");
+        const image = await this.d.sceneImages.generate({ prompt: scene.imagePrompt ?? "", referenceImages: [reference] });
+        const asset = await this.d.storage.put(`scene-images/${video.id}/${index + 1}-${randomUUID()}.${image.extension}`, { bytes: image.bytes, mimeType: image.mimeType, extension: image.extension, metadata: { projectId: batch.productId, purpose: "SCENE_IMAGE", model: image.model, originalFilename: `scene-${index + 1}.${image.extension}` } });
+        scenes[index] = { ...scene, sceneImageAssetId: asset.id, imageStatus: "READY" };
+      } catch (error) {
+        scenes[index] = { ...scene, imageStatus: "FAILED", imageError: (error instanceof Error ? error.message : "The image could not be made.").slice(0, 300) };
+      }
+    };
+    const pending = scenes.flatMap((scene, index) => scene.imageStatus === "GENERATING" ? [index] : []);
+    for (let start = 0; start < pending.length; start += SCENE_IMAGE_CONCURRENCY) await Promise.all(pending.slice(start, start + SCENE_IMAGE_CONCURRENCY).map(make));
+    await this.d.videos.updateVideo({ ...video, plan: { ...video.plan, scenes }, updatedAt: this.now() });
+    const failed = scenes.filter((scene) => scene.imageStatus === "FAILED").length;
+    // Paid requests are never repeated automatically; failed scenes show why and can be made again by hand.
+    return failed ? { status: "FAILED", lastError: `${failed} scene image(s) failed.` } : { status: "COMPLETED" };
   }
 
   /** Queues the chosen plans for rendering; each video is voiced and rendered on the server one at a time. */
@@ -132,6 +186,7 @@ export class WinnerVideoService {
     const videos = await this.d.videos.listVideos(batchId);
     const chosen = videos.filter((video) => videoIds.includes(video.id) && (video.status === "PLANNED" || video.status === "FAILED"));
     if (!chosen.length) throw new DomainError("NO_VIDEOS_SELECTED", "Choose at least one plan that hasn't been made yet.");
+    if (chosen.some(generating)) throw new DomainError("SCENE_IMAGES_IN_PROGRESS", "Wait until the AI scene images are finished, then make the video.");
     const now = this.now();
     for (const video of chosen) {
       const { failureMessage: _f, ...rest } = video;
@@ -162,12 +217,14 @@ export class WinnerVideoService {
       const voiceDurationMs = (await this.d.renderer.probe(voiceFile)).durationMs ?? 0;
       const scenes = [];
       for (const [index, scene] of video.plan.scenes.entries()) {
-        const asset = product.assets.find((item) => item.id === scene.photoAssetId);
-        if (!asset) throw new DomainError("VIDEO_PHOTO_MISSING", "A product photo used by this plan was removed. Write new plans.");
+        // A finished AI scene image is used full frame; otherwise the product photo sits on its blurred copy.
+        const sceneImage = scene.sceneImageAssetId && scene.imageStatus === "READY" ? await this.d.storage.getAsset(scene.sceneImageAssetId) : undefined;
+        const asset = sceneImage ?? product.assets.find((item) => item.id === scene.photoAssetId);
+        if (!asset) throw new DomainError("VIDEO_PHOTO_MISSING", "A product photo used by this plan was removed. Choose another photo with Edit.");
         const photoPath = join(root, `photo-${index}.${asset.mimeType.split("/")[1] ?? "jpg"}`);
         await writeFile(photoPath, await this.d.storage.read(asset.storageKey));
         const size = await this.d.renderer.probe(photoPath);
-        scenes.push({ photoPath, photoWidth: size.width ?? 1080, photoHeight: size.height ?? 1080, motion: scene.motion, caption: scene.caption, durationMs: scene.durationMs });
+        scenes.push({ photoPath, photoWidth: size.width ?? 1080, photoHeight: size.height ?? 1080, motion: scene.motion, caption: scene.caption, durationMs: scene.durationMs, ...(sceneImage ? { fullFrame: true } : {}) });
       }
       const rendered = await this.d.renderer.render({ scenes, hookText: video.plan.hookText, ctaText: video.plan.ctaText, voicePath: voiceFile, voiceDurationMs, targetDurationMs: batch.targetDurationMs, style: video.plan.style ?? "PHOTO_MOTION" });
       const asset = await this.d.storage.put(`winner-videos/${batch.id}/${video.id}.mp4`, { bytes: rendered.bytes, mimeType: "video/mp4", extension: "mp4", metadata: { projectId: batch.productId, purpose: "WINNER_VIDEO", originalFilename: `${video.plan.title.slice(0, 80)}.mp4` } });

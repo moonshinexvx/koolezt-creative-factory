@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 describe("creative strategy additive migrations", () => {
   it("adds isolated strategy persistence, immutable revisions, durable provider results, handoffs, and project links", async () => {
     const names = (await readdir(new URL("../db/migrations", import.meta.url))).filter((name) => name.endsWith(".sql")).sort();
-    expect(names.at(-1)).toBe("0027_remove_campaign_data.sql");
+    expect(names.at(-1)).toBe("0028_scene_image_jobs.sql");
     const sql = await readFile(new URL("../db/migrations/0016_creative_strategy.sql", import.meta.url), "utf8");
     for (const table of ["creative_strategy_batches", "creative_strategy_concepts", "creative_strategy_concept_revisions", "creative_strategy_provider_operations", "creative_strategy_handoffs"]) expect(sql).toContain(`CREATE TABLE ${table}`);
     expect(sql).toContain("result_payload jsonb");

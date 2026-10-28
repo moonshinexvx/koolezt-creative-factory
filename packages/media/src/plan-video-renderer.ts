@@ -18,7 +18,8 @@ const VOICE_TAIL_MS = 700;
 const CTA_MS = 2_500;
 const MOTION_ZOOM = 0.12;
 
-export type PlanRenderScene = Readonly<{ photoPath: string; photoWidth: number; photoHeight: number; motion: VideoPlanMotion; caption: string; durationMs: number }>;
+/** fullFrame: the image is a finished scene (AI scene image) and fills the whole frame instead of sitting on a blurred background. */
+export type PlanRenderScene = Readonly<{ photoPath: string; photoWidth: number; photoHeight: number; motion: VideoPlanMotion; caption: string; durationMs: number; fullFrame?: boolean }>;
 export type PlanRenderInput = Readonly<{ scenes: readonly PlanRenderScene[]; hookText: string; ctaText: string; voicePath: string; voiceDurationMs: number; targetDurationMs: number; style?: VideoPlanStyle }>;
 
 /** Greedy word wrap; words longer than a line are kept whole rather than split mid-word. */
@@ -89,18 +90,22 @@ export function buildPlanVideoArguments(input: Readonly<{
   input.scenes.forEach((scene, index) => {
     const clipMs = input.sceneMs[index]! + (index < last ? transitionMs : 0);
     const frames = Math.round((clipMs / 1000) * PLAN_VIDEO_FPS);
-    const box = foregroundBox(scene.photoWidth, scene.photoHeight);
+    const full = scene.fullFrame === true;
+    const box = full ? { width: PLAN_VIDEO_WIDTH, height: PLAN_VIDEO_HEIGHT } : foregroundBox(scene.photoWidth, scene.photoHeight);
+    // Full-frame scenes are cropped to 9:16 and upscaled 1.5x (not 2x) to keep the zoom smooth without a 4K intermediate.
+    const zoomSource = full ? `scale=${box.width * 1.5}:${box.height * 1.5}:force_original_aspect_ratio=increase,crop=${box.width * 1.5}:${box.height * 1.5}` : `scale=${box.width * 2}:${box.height * 2}`;
+    const lift = full ? 0 : 140;
     const motion = motionExpressions(scene.motion, frames, stop);
     // Stop motion: the photo tilts and shifts a little on every step, and the light flickers, like frames shot by hand.
     const step = `floor(n/${STOP_MOTION_STEP})`;
     const tilt = stop ? `,format=rgba,rotate=a='0.018*sin(${step}*7.13+${index})':c=none` : "";
-    const position = stop ? `x='(W-w)/2+9*sin(${step}*12.99+${index})':y='(H-h)/2-140+9*cos(${step}*7.77+${index})':eval=frame` : "(W-w)/2:(H-h)/2-140";
+    const position = stop ? `x='(W-w)/2+9*sin(${step}*12.99+${index})':y='(H-h)/2-${lift}+9*cos(${step}*7.77+${index})':eval=frame` : `(W-w)/2:(H-h)/2-${lift}`;
     const handmade = stop ? `,eq=brightness='0.025*sin(${step}*3.7)':eval=frame,noise=alls=7:allf=t` : "";
     // Upscaling before zoompan keeps slow zooms smooth instead of stepping a pixel at a time.
     filters.push(
       `[${index}:v]split[bgsrc${index}][fgsrc${index}]`,
       `[bgsrc${index}]scale=${PLAN_VIDEO_WIDTH}:${PLAN_VIDEO_HEIGHT}:force_original_aspect_ratio=increase,crop=${PLAN_VIDEO_WIDTH}:${PLAN_VIDEO_HEIGHT},gblur=sigma=30,eq=brightness=-0.06[bg${index}]`,
-      `[fgsrc${index}]scale=${box.width * 2}:${box.height * 2},zoompan=z='${motion.z}':x='${motion.x}':y='${motion.y}':d=1:s=${box.width}x${box.height}:fps=${PLAN_VIDEO_FPS}${tilt}[fg${index}]`,
+      `[fgsrc${index}]${zoomSource},zoompan=z='${motion.z}':x='${motion.x}':y='${motion.y}':d=1:s=${box.width}x${box.height}:fps=${PLAN_VIDEO_FPS}${tilt}[fg${index}]`,
       `[bg${index}][fg${index}]overlay=${position}:shortest=1${handmade},trim=duration=${(clipMs / 1000).toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p[s${index}]`
     );
   });

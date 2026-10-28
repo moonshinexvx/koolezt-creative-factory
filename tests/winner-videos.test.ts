@@ -7,7 +7,7 @@ import { canonicalizeVideoPlan, CreativeDnaService, CreativeFactoryService, Winn
 import type { VideoRenderer } from "@koolezt/application";
 import { InMemoryCreativeDnaStore, InMemoryCreativeStrategyStore, InMemoryFactoryRepository, InMemoryWinnerJobStore, InMemoryWinnerVideoStore } from "@koolezt/infrastructure";
 import { FakeExternalMediaDeliveryProvider, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, MetadataMediaInspector, PlanVideoRenderer, planTimeline, wrapText } from "@koolezt/media";
-import { FakeCompositionProvider, FakeCreativeProvider, FakeVideoGenerationProvider, FakeVoiceProvider } from "@koolezt/providers";
+import { FakeCompositionProvider, FakeCreativeProvider, FakeSceneImageProvider, FakeVideoGenerationProvider, FakeVoiceProvider } from "@koolezt/providers";
 import type { CreativeDnaPreprocessor } from "@koolezt/domain";
 
 const architecture = process.arch === "arm64" ? "arm64" : "x64";
@@ -56,10 +56,11 @@ async function harness(options: Readonly<{ renderer?: VideoRenderer; loadAverage
   const source = await storage.put("history/winner.mp4", { bytes: new Uint8Array([0, 0, 0, 24, ...Buffer.from("ftypisom")]), mimeType: "video/mp4", extension: "mp4", metadata: {} });
   const reference = await dnaService.register({ productId: product.id, assetId: source.id, displayName: "Ad1", operatorStatus: "WINNER", actor: "owner" });
   const renderer: VideoRenderer = options.renderer ?? { probe: vi.fn(async () => ({ width: 1200, height: 1500, durationMs: 4_000 })), render: vi.fn(async () => ({ bytes: new Uint8Array([0, 0, 0, 24, ...Buffer.from("ftypisom")]), durationMs: 15_000 })) };
-  const service = new WinnerVideoService({ repository, dna, videos, jobs, provider, voice: new FakeVoiceProvider(resolve("tests/fixtures/vertical-1080x1920.mp4")), storage, renderer, ...(options.loadAverage ? { loadAverage: options.loadAverage } : {}) });
-  const runner = new WinnerJobRunner({ jobs, handlers: { ANALYZE_WINNER: (job) => dnaService.runJob(job), WRITE_VIDEO_PLANS: (job) => service.writePlans(job), RENDER_VIDEO: (job) => service.renderVideo(job) } });
+  const sceneImages = new FakeSceneImageProvider({ bytes: new Uint8Array(await readFile(join(root, "photo.jpg"))), mimeType: "image/jpeg", extension: "jpg" });
+  const service = new WinnerVideoService({ repository, dna, videos, jobs, provider, voice: new FakeVoiceProvider(resolve("tests/fixtures/vertical-1080x1920.mp4")), storage, renderer, sceneImages, ...(options.loadAverage ? { loadAverage: options.loadAverage } : {}) });
+  const runner = new WinnerJobRunner({ jobs, handlers: { ANALYZE_WINNER: (job) => dnaService.runJob(job), WRITE_VIDEO_PLANS: (job) => service.writePlans(job), RENDER_VIDEO: (job) => service.renderVideo(job), GENERATE_SCENE_IMAGES: (job) => service.generateSceneImages(job) } });
   const drain = async () => { let count = 0; while (await runner.runOnce()) count++; return count; };
-  return { root, repository, dna, jobs, videos, storage, provider, product, photo, reference, dnaService, service, runner, renderer, drain, dispose: () => rm(root, { recursive: true, force: true }) };
+  return { root, repository, dna, jobs, videos, storage, provider, sceneImages, product, photo, reference, dnaService, service, runner, renderer, drain, dispose: () => rm(root, { recursive: true, force: true }) };
 }
 
 describe("winner to videos", () => {
@@ -185,6 +186,33 @@ describe("winner to videos", () => {
       const made = await setup.videos.getVideo(video!.id);
       expect(made).toMatchObject({ status: "READY" });
       expect(made.durationMs).toBeGreaterThanOrEqual(14_500);
+    } finally { await setup.dispose(); }
+  }, 120_000);
+
+  it("makes AI scene images from each scene's prompt and the main photo, then renders them full frame", async () => {
+    const setup = await harness({ renderer: new PlanVideoRenderer({ ffmpegPath: ffmpeg, ffprobePath: ffprobe, lowPriority: false }) });
+    try {
+      await setup.dnaService.requestAnalysis(setup.reference.id, crypto.randomUUID());
+      await setup.drain();
+      const batch = await setup.service.requestPlans({ referenceId: setup.reference.id, count: 3, durationSeconds: 15, actor: "owner" });
+      await setup.drain();
+      const [video] = await setup.videos.listVideos(batch.id);
+      const started = await setup.service.requestSceneImages(video!.id);
+      expect(started.plan.scenes.every((scene) => scene.imageStatus === "GENERATING")).toBe(true);
+      await expect(setup.service.makeVideos(batch.id, [video!.id])).rejects.toMatchObject({ code: "SCENE_IMAGES_IN_PROGRESS" });
+      await expect(setup.service.editPlan(video!.id, video!.plan)).rejects.toMatchObject({ code: "SCENE_IMAGES_IN_PROGRESS" });
+      await setup.drain();
+      const withImages = await setup.videos.getVideo(video!.id);
+      expect(withImages.plan.scenes.every((scene) => scene.imageStatus === "READY" && scene.sceneImageAssetId)).toBe(true);
+      expect(setup.sceneImages.prompts).toEqual(video!.plan.scenes.map((scene) => scene.imagePrompt));
+      expect((await setup.storage.getAsset(withImages.plan.scenes[0]!.sceneImageAssetId!)).kind).toBe("IMAGE");
+      // Reordering keeps each scene's image; an unknown image id falls back to the product photo.
+      const [a, b, c] = withImages.plan.scenes;
+      const reordered = await setup.service.editPlan(video!.id, { ...withImages.plan, scenes: [b!, a!, { ...c!, sceneImageAssetId: crypto.randomUUID() }] });
+      expect(reordered.plan.scenes.map((scene) => scene.sceneImageAssetId)).toEqual([b!.sceneImageAssetId, a!.sceneImageAssetId, undefined]);
+      await setup.service.makeVideos(batch.id, [video!.id]);
+      await setup.drain();
+      expect(await setup.videos.getVideo(video!.id)).toMatchObject({ status: "READY" });
     } finally { await setup.dispose(); }
   }, 120_000);
 });

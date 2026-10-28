@@ -4,7 +4,7 @@ import { DomainError } from "@koolezt/domain";
 import { DesktopCompositionProvider, PostgresCreativeDnaStore, PostgresWinnerJobStore, PostgresWinnerVideoStore, PostgresCreativeStrategyStore, PostgresDesktopRenderJobStore, PostgresDurableMediaAssetCatalog, PostgresExternalMediaStagingStore, PostgresFactoryRepository, PostgresMediaAssetCatalog, PostgresRenderWorkerIdentityStore, PostgresProjectArchiveStore, PostgresVariantCreativePackageStore, PostgresVariantFactoryStore, createPostgresPool } from "@koolezt/infrastructure";
 import { CloudflareAccessVerifier } from "./browser-auth.js";
 import { PlanVideoRenderer, DurableReadyPublisher, FakeExternalMediaDeliveryProvider, FfmpegCreativeDnaPreprocessor, FfprobeMediaInspector, HybridDurableMediaStore, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, S3DurableMediaStore, S3ExternalMediaDeliveryProvider, StorageBackedMediaInspector } from "@koolezt/media";
-import { ClaudeCreativeProvider, CreatomateCompositionProvider, HttpMetaAdsGateway, OpenAIAudioTranscriber, CreatomateOutputIngestor, ElevenLabsVoiceProvider, FakeCompositionProvider, FakeCreativeProvider, FakeVideoGenerationProvider, FakeVoiceProvider, HttpCreatomateTransport, HttpKlingTransport, HttpSeedanceTransport, KlingOutputIngestor, KlingVideoGenerationProvider, OpenAICreativeProvider, OpenAIVoiceProvider, OPENAI_VOICE_DEFAULT_STYLE, RoutedVideoOutputIngestor, SeedanceOutputIngestor, SeedanceVideoGenerationProvider, UnavailableCompositionProvider, UnavailableVideoGenerationProvider } from "@koolezt/providers";
+import { ClaudeCreativeProvider, CreatomateCompositionProvider, HttpMetaAdsGateway, OpenAIAudioTranscriber, CreatomateOutputIngestor, ElevenLabsVoiceProvider, FakeCompositionProvider, OpenAISceneImageProvider, FakeCreativeProvider, FakeVideoGenerationProvider, FakeVoiceProvider, HttpCreatomateTransport, HttpKlingTransport, HttpSeedanceTransport, KlingOutputIngestor, KlingVideoGenerationProvider, OpenAICreativeProvider, OpenAIVoiceProvider, OPENAI_VOICE_DEFAULT_STYLE, RoutedVideoOutputIngestor, SeedanceOutputIngestor, SeedanceVideoGenerationProvider, UnavailableCompositionProvider, UnavailableVideoGenerationProvider } from "@koolezt/providers";
 import type { ClaudeEffort } from "@koolezt/providers";
 
 export function createRuntime(env = process.env) {
@@ -170,8 +170,9 @@ export function createRuntime(env = process.env) {
   // Videos are voiced with the configured voice and rendered on this server at the lowest priority, two threads at most.
   const winnerVideos = new WinnerVideoService({ repository, dna: creativeDna, videos: winnerVideoStore, jobs: winnerJobs, provider: creativeProvider, voice: voiceProvider, storage,
     renderer: new PlanVideoRenderer({ ffmpegPath: env.FFMPEG_PATH ?? "ffmpeg", ffprobePath: env.FFPROBE_PATH ?? "ffprobe", threads: Number(env.VIDEO_RENDER_THREADS ?? "2") }),
-    voiceProfileId: env.OPENAI_VOICE_NAME ?? "marin", maxLoadAverage: Number(env.VIDEO_RENDER_MAX_LOAD ?? "2.5") });
-  const winnerJobRunner = new WinnerJobRunner({ jobs: winnerJobs, handlers: { ANALYZE_WINNER: (job) => creativeDnaService.runJob(job), WRITE_VIDEO_PLANS: (job) => winnerVideos.writePlans(job), RENDER_VIDEO: (job) => winnerVideos.renderVideo(job) } });
+    voiceProfileId: env.OPENAI_VOICE_NAME ?? "marin", maxLoadAverage: Number(env.VIDEO_RENDER_MAX_LOAD ?? "2.5"),
+    ...(env.OPENAI_API_KEY ? { sceneImages: new OpenAISceneImageProvider({ apiKey: env.OPENAI_API_KEY, model: env.OPENAI_IMAGE_MODEL ?? "gpt-image-2", quality: env.OPENAI_IMAGE_QUALITY ?? "medium", size: env.OPENAI_IMAGE_SIZE ?? "1024x1536" }) } : {}) });
+  const winnerJobRunner = new WinnerJobRunner({ jobs: winnerJobs, handlers: { ANALYZE_WINNER: (job) => creativeDnaService.runJob(job), WRITE_VIDEO_PLANS: (job) => winnerVideos.writePlans(job), RENDER_VIDEO: (job) => winnerVideos.renderVideo(job), GENERATE_SCENE_IMAGES: (job) => winnerVideos.generateSceneImages(job) } });
   return {
     metaWinners,
     winnerJobs,

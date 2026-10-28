@@ -58,3 +58,8 @@
 .scene-prompt div{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .scene-prompt p{margin:0;white-space:pre-wrap;color:#34495f}
 .scene-prompt button{padding:2px 8px;font-size:12px}
+.scene-ai-image{display:flex;gap:10px;align-items:center}
+.scene-ai-image img{width:72px;height:108px;object-fit:cover;border-radius:4px;border:2px solid #4b2f86}
+.scene-ai-image div{display:grid;gap:6px;font-size:13px}
+.link-button{justify-self:start;padding:0;border:none;background:none;color:#1d4f86;text-decoration:underline;font-size:12px;cursor:pointer}
+.plan-scenes small.error{color:#8a2c1f}

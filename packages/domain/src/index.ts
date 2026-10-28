@@ -336,7 +336,7 @@ export type WinnerMeasurements = Readonly<{
   performance?: Readonly<{ spend?: number; purchases?: number; revenue?: number; cpa?: number; roas?: number; linkCtr?: number; cpc?: number; cpm?: number; currency?: string; dateStart?: string; dateEnd?: string; metricSource?: string; impressions?: number; threeSecondViews?: number; thruPlays?: number; hookRate?: number; holdRate?: number }>;
 }>;
 /** Background work for the winner-to-video app. Jobs run one at a time in the worker. */
-export type WinnerJobKind = "ANALYZE_WINNER" | "WRITE_VIDEO_PLANS" | "RENDER_VIDEO";
+export type WinnerJobKind = "ANALYZE_WINNER" | "WRITE_VIDEO_PLANS" | "RENDER_VIDEO" | "GENERATE_SCENE_IMAGES";
 export type WinnerJobStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
 export type WinnerJob = Readonly<{
   id: string; kind: WinnerJobKind; targetId: string; operationKey: string; status: WinnerJobStatus; attempts: number;
@@ -357,7 +357,17 @@ export type VideoPlanMotion = (typeof VIDEO_PLAN_MOTIONS)[number];
 export const VIDEO_PLAN_STYLES = ["PHOTO_MOTION", "STOP_MOTION"] as const;
 export type VideoPlanStyle = (typeof VIDEO_PLAN_STYLES)[number];
 /** imagePrompt and videoPrompt are ready to paste into OpenAI image generation and Kling/Seedance image-to-video; the app does not call those services yet. */
-export type VideoPlanScene = Readonly<{ photoAssetId: string; motion: VideoPlanMotion; caption: string; durationMs: number; imagePrompt?: string; videoPrompt?: string }>;
+export type SceneImageStatus = "GENERATING" | "READY" | "FAILED";
+/** sceneImageAssetId is an AI-made full-frame image for the scene (from imagePrompt); when present the video uses it instead of the product photo. */
+export type VideoPlanScene = Readonly<{
+  photoAssetId: string; motion: VideoPlanMotion; caption: string; durationMs: number; imagePrompt?: string; videoPrompt?: string;
+  sceneImageAssetId?: string; imageStatus?: SceneImageStatus; imageError?: string;
+}>;
+/** Makes one scene image from a prompt and reference product photos. */
+export interface SceneImageProvider {
+  readonly model: string;
+  generate(input: Readonly<{ prompt: string; referenceImages: readonly Readonly<{ bytes: Uint8Array; mimeType: string }>[] }>): Promise<Readonly<{ bytes: Uint8Array; mimeType: string; extension: string; model: string }>>;
+}
 /** One new video based on a winner: what it keeps, what it changes, and exactly what to render. Plans written before styles existed have no style and render as PHOTO_MOTION. */
 export type VideoPlan = Readonly<{ title: string; keepsFromWinner: string; changes: string; hookText: string; voiceover: string; scenes: readonly VideoPlanScene[]; ctaText: string; style?: VideoPlanStyle }>;
 export type WinnerVideoBatchStatus = "WRITING" | "READY" | "FAILED";

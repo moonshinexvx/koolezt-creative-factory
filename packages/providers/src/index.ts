@@ -31,6 +31,7 @@ export { OpenAICreativeProvider } from "./openai-creative.js";
 export { OPENAI_CREATIVE_INSTRUCTIONS, OPENAI_CREATIVE_PROMPT_VERSION, OPENAI_NARRATION_REWRITE_INSTRUCTIONS } from "./openai-creative-prompt.js";
 export { OpenAIVoiceProvider, OPENAI_VOICE_DEFAULT_STYLE } from "./openai-voice.js";
 export { OpenAIAudioTranscriber } from "./openai-transcription.js";
+export { FakeSceneImageProvider, OpenAISceneImageProvider } from "./openai-scene-image.js";
 export { HttpMetaAdsGateway, metaAdMetrics, normalizeAdAccountId } from "./meta-ads.js";
 export { ElevenLabsVoiceProvider, normalizeElevenLabsAlignment } from "./elevenlabs-voice.js";
 export {

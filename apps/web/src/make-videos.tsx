@@ -5,6 +5,8 @@ const motionLabel: Record<string, string> = { ZOOM_IN: "slow zoom in", ZOOM_OUT:
 const statusLabel: Record<string, string> = { PLANNED: "Plan", QUEUED: "Waiting to be made", RENDERING: "Making video…", READY: "Video ready", FAILED: "Failed" };
 const styleLabel: Record<string, string> = { PHOTO_MOTION: "Photo motion", STOP_MOTION: "Stop motion" };
 const seconds = (ms: number) => `${Math.round(ms / 100) / 10}s`;
+const hasAiImage = (scene: any) => scene.imageStatus === "READY" && scene.sceneImageAssetId;
+const makingImages = (video: any) => video.plan.scenes.some((scene: any) => scene.imageStatus === "GENERATING");
 
 function CopyPrompt({ label, text }: Readonly<{ label: string; text?: string }>) {
   const [copied, setCopied] = useState(false);
@@ -37,7 +39,9 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
     <label>Style<select value={draft.style ?? "PHOTO_MOTION"} onChange={(event) => set("style", event.target.value)}>{Object.entries(styleLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
     <b>Scenes</b>
     <ol className="scene-editor">{draft.scenes.map((scene: any, index: number) => <li key={index}>
-      <div className="scene-photos">{photos.map((photo: any) => <button type="button" key={photo.id} className={photo.id === scene.photoAssetId ? "chosen" : ""} title={photo.label} onClick={() => setScene(index, "photoAssetId", photo.id)}><img src={`/api/assets/${photo.id}`} alt={photo.label} /></button>)}</div>
+      {scene.sceneImageAssetId
+        ? <div className="scene-ai-image"><img src={`/api/assets/${scene.sceneImageAssetId}`} alt="AI scene" /><div><b>AI scene image</b><button type="button" onClick={() => setDraft((current: any) => ({ ...current, scenes: current.scenes.map((item: any, at: number) => at === index ? { ...item, sceneImageAssetId: undefined, imageStatus: undefined, imageError: undefined } : item) }))}>Use product photo instead</button></div></div>
+        : <div className="scene-photos">{photos.map((photo: any) => <button type="button" key={photo.id} className={photo.id === scene.photoAssetId ? "chosen" : ""} title={photo.label} onClick={() => setScene(index, "photoAssetId", photo.id)}><img src={`/api/assets/${photo.id}`} alt={photo.label} /></button>)}</div>}
       <label>Caption<input value={scene.caption} maxLength={80} onChange={(event) => setScene(index, "caption", event.target.value)} /></label>
       <div className="scene-row">
         <label>Seconds<input type="number" min={1} max={15} step={0.5} value={scene.durationMs / 1000} onChange={(event) => setScene(index, "durationMs", Math.round(Math.min(15, Math.max(1, Number(event.target.value) || 1)) * 1000))} /></label>
@@ -58,13 +62,16 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
   </article>;
 }
 
-function PlanCard({ video, selected, onToggle, onEdit }: Readonly<{ video: any; selected: boolean; onToggle: () => void; onEdit: () => void }>) {
+function PlanCard({ video, selected, working, onToggle, onEdit, onSceneImages }: Readonly<{ video: any; selected: boolean; working: boolean; onToggle: () => void; onEdit: () => void; onSceneImages: (scenes?: number[]) => void }>) {
   const plan = video.plan;
-  const selectable = video.status === "PLANNED" || video.status === "FAILED";
-  const editable = selectable || video.status === "READY";
+  const busyImages = makingImages(video);
+  const selectable = (video.status === "PLANNED" || video.status === "FAILED") && !busyImages;
+  const editable = (video.status === "PLANNED" || video.status === "FAILED" || video.status === "READY") && !busyImages;
+  const canMakeImages = editable && plan.scenes.some((scene: any) => scene.imagePrompt);
+  const aiCount = plan.scenes.filter(hasAiImage).length;
   return <article className={`plan-card ${video.status.toLowerCase()} ${selected ? "selected" : ""}`}>
     <header>
-      {selectable ? <label className="plan-select"><input type="checkbox" checked={selected} onChange={onToggle} /> Make this video</label> : <span className={`plan-status ${video.status.toLowerCase()}`}>{statusLabel[video.status] ?? video.status}</span>}
+      {busyImages ? <span className="plan-status rendering">Making AI scene images…</span> : selectable ? <label className="plan-select"><input type="checkbox" checked={selected} onChange={onToggle} /> Make this video</label> : <span className={`plan-status ${video.status.toLowerCase()}`}>{statusLabel[video.status] ?? video.status}</span>}
       <h4>{video.ordinal}. {plan.title}</h4>
       <span className="plan-style">{styleLabel[plan.style ?? "PHOTO_MOTION"]}</span>
     </header>
@@ -79,9 +86,14 @@ function PlanCard({ video, selected, onToggle, onEdit }: Readonly<{ video: any; 
     </dl>
     <details><summary>Voiceover and scenes</summary>
       <p className="voiceover">"{plan.voiceover}"</p>
-      <ol className="plan-scenes">{plan.scenes.map((scene: any, index: number) => <li key={index}><img src={`/api/assets/${scene.photoAssetId}`} alt="" /><div><b>{scene.caption || "No caption"}</b><small>{seconds(scene.durationMs)} · {motionLabel[scene.motion] ?? scene.motion}</small></div>
+      <ol className="plan-scenes">{plan.scenes.map((scene: any, index: number) => <li key={index}><a href={`/api/assets/${hasAiImage(scene) ? scene.sceneImageAssetId : scene.photoAssetId}`} target="_blank" rel="noreferrer"><img src={`/api/assets/${hasAiImage(scene) ? scene.sceneImageAssetId : scene.photoAssetId}`} alt="" /></a><div><b>{scene.caption || "No caption"}</b><small>{seconds(scene.durationMs)} · {motionLabel[scene.motion] ?? scene.motion}{hasAiImage(scene) ? " · AI image" : ""}</small>
+          {scene.imageStatus === "GENERATING" && <small className="muted">Making AI image…</small>}
+          {scene.imageStatus === "FAILED" && <small className="error">AI image failed: {scene.imageError}</small>}
+          {canMakeImages && scene.imagePrompt && <button type="button" className="link-button" disabled={working} onClick={() => onSceneImages([index])}>{hasAiImage(scene) || scene.imageStatus === "FAILED" ? "Make AI image again" : "Make AI image"}</button>}</div>
         <CopyPrompt label="OpenAI image prompt" text={scene.imagePrompt} /><CopyPrompt label="Kling / Seedance video prompt" text={scene.videoPrompt} /></li>)}</ol>
     </details>
+    {canMakeImages && <button type="button" disabled={working} onClick={() => onSceneImages()}>{aiCount ? `Make all ${plan.scenes.length} AI scene images again` : `Make AI scene images (${plan.scenes.length})`}</button>}
+    {busyImages && <p className="muted small">OpenAI is making one image per scene from the main product photo. This takes about 1–2 minutes and refreshes automatically.</p>}
     {editable && <button type="button" onClick={onEdit}>{video.status === "READY" ? "Edit and make again" : "Edit photos and scenes"}</button>}
   </article>;
 }
@@ -101,7 +113,7 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
   useEffect(() => { void api("/api/products").then(setProducts).catch(() => undefined); }, []);
   const photosOf = (productId: string) => (products.find((product: any) => product.id === productId)?.assets ?? []).filter((asset: any) => asset.kind === "IMAGE");
   useEffect(() => { void load().catch((reason) => setError(reason instanceof Error ? reason.message : "Could not load videos.")); }, [load]);
-  const busy = batches.some((entry) => entry.batch.status === "WRITING" || entry.videos.some((video: any) => video.status === "QUEUED" || video.status === "RENDERING"));
+  const busy = batches.some((entry) => entry.batch.status === "WRITING" || entry.videos.some((video: any) => video.status === "QUEUED" || video.status === "RENDERING" || makingImages(video)));
   useEffect(() => {
     if (!busy) return;
     const timer = window.setInterval(() => void load().catch(() => undefined), 5_000);
@@ -134,7 +146,7 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
         {batch.status === "READY" && <>
           <div className="plan-grid">{videos.map((video: any) => editing === video.id
             ? <PlanEditor key={video.id} video={video} photos={photosOf(batch.productId)} onCancel={() => setEditing("")} onSaved={async () => { setEditing(""); await load(); }} />
-            : <PlanCard key={video.id} video={video} selected={selected.includes(video.id)} onEdit={() => setEditing(video.id)} onToggle={() => setSelected((current) => current.includes(video.id) ? current.filter((id) => id !== video.id) : [...current, video.id])} />)}</div>
+            : <PlanCard key={video.id} video={video} working={working} selected={selected.includes(video.id)} onEdit={() => setEditing(video.id)} onSceneImages={(scenes) => void run(() => api(`/api/videos/${video.id}/scene-images`, "POST", scenes ? { scenes } : {}), "Could not start the AI scene images.")} onToggle={() => setSelected((current) => current.includes(video.id) ? current.filter((id) => id !== video.id) : [...current, video.id])} />)}</div>
           <div className="winner-actions"><button className="primary" disabled={working || !chosen.length} onClick={() => void run(async () => { await api(`/api/video-batches/${batch.id}/make`, "POST", { videoIds: chosen.map((video: any) => video.id) }); setSelected((current) => current.filter((id) => !chosen.some((video: any) => video.id === id))); }, "Could not start making videos.")}>Make {chosen.length || ""} selected video{chosen.length === 1 ? "" : "s"}</button><span className="muted small">Each video takes about 20–40 seconds to make, one after another.</span></div>
         </>}
       </div>;
