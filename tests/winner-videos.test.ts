@@ -8,6 +8,7 @@ import type { VideoRenderer } from "@koolezt/application";
 import { InMemoryCreativeDnaStore, InMemoryCreativeStrategyStore, InMemoryFactoryRepository, InMemoryWinnerJobStore, InMemoryWinnerVideoStore } from "@koolezt/infrastructure";
 import { FakeExternalMediaDeliveryProvider, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, MetadataMediaInspector, PlanVideoRenderer, planTimeline, wrapText } from "@koolezt/media";
 import { FakeCompositionProvider, FakeCreativeProvider, FakeSceneImageProvider, FakeVideoGenerationProvider, FakeVoiceProvider } from "@koolezt/providers";
+import { sceneImagePrompt } from "@koolezt/domain";
 import type { CreativeDnaPreprocessor } from "@koolezt/domain";
 
 const architecture = process.arch === "arm64" ? "arm64" : "x64";
@@ -180,7 +181,7 @@ describe("winner to videos", () => {
       expect(plansSpy.mock.calls[0]![0]).toMatchObject({ style: "STOP_MOTION" });
       const [video] = await setup.videos.listVideos(batch.id);
       expect(video!.plan.style).toBe("STOP_MOTION");
-      expect(video!.plan.scenes[0]).toMatchObject({ imagePrompt: expect.stringContaining("exact product"), videoPrompt: expect.stringContaining("product stays still") });
+      expect(video!.plan.scenes[0]).toMatchObject({ imagePrompt: expect.stringContaining("wooden table"), videoPrompt: expect.stringContaining("Slow push-in") });
       await setup.service.makeVideos(batch.id, [video!.id]);
       await setup.drain();
       const made = await setup.videos.getVideo(video!.id);
@@ -204,7 +205,9 @@ describe("winner to videos", () => {
       await setup.drain();
       const withImages = await setup.videos.getVideo(video!.id);
       expect(withImages.plan.scenes.every((scene) => scene.imageStatus === "READY" && scene.sceneImageAssetId)).toBe(true);
-      expect(setup.sceneImages.prompts).toEqual(video!.plan.scenes.map((scene) => scene.imagePrompt));
+      // The product rules go in front of each scene's own description.
+      expect(setup.sceneImages.prompts).toEqual(video!.plan.scenes.map((scene) => sceneImagePrompt(scene.imagePrompt!)));
+      expect(setup.sceneImages.prompts[0]).toMatch(/^Use the attached product photo as the exact product\.[\s\S]*Scene: Fake scene 1/);
       expect((await setup.storage.getAsset(withImages.plan.scenes[0]!.sceneImageAssetId!)).kind).toBe("IMAGE");
       // Reordering keeps each scene's image; an unknown image id falls back to the product photo.
       const [a, b, c] = withImages.plan.scenes;

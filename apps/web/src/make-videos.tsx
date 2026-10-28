@@ -3,15 +3,19 @@ import { api } from "./api.js";
 
 const motionLabel: Record<string, string> = { ZOOM_IN: "slow zoom in", ZOOM_OUT: "slow zoom out", PAN_LEFT: "pan left", PAN_RIGHT: "pan right" };
 const statusLabel: Record<string, string> = { PLANNED: "Plan", QUEUED: "Waiting to be made", RENDERING: "Making video…", READY: "Video ready", FAILED: "Failed" };
+// Same text as SCENE_IMAGE_PRODUCT_RULES / SCENE_VIDEO_PRODUCT_RULES in @koolezt/domain; the server adds them to every AI image request.
+const IMAGE_RULES = "Use the attached product photo as the exact product. Keep its shape, colors, printed artwork, text and proportions identical; do not redraw, warp or restyle it. Vertical 9:16 photorealistic photo. No added text, logos or watermarks.";
+const VIDEO_RULES = "The product stays completely still and unchanged: no morphing, no new text, no warping of the printed artwork.";
 const styleLabel: Record<string, string> = { PHOTO_MOTION: "Photo motion", STOP_MOTION: "Stop motion" };
 const seconds = (ms: number) => `${Math.round(ms / 100) / 10}s`;
 const hasAiImage = (scene: any) => scene.imageStatus === "READY" && scene.sceneImageAssetId;
 const makingImages = (video: any) => video.plan.scenes.some((scene: any) => scene.imageStatus === "GENERATING");
 
-function CopyPrompt({ label, text }: Readonly<{ label: string; text?: string }>) {
+/** Shows only the scene's own description; Copy gives the full prompt with the product rules in front. */
+function CopyPrompt({ label, text, rules }: Readonly<{ label: string; text?: string; rules: string }>) {
   const [copied, setCopied] = useState(false);
   if (!text) return null;
-  return <div className="scene-prompt"><div><b>{label}</b><button type="button" onClick={() => void navigator.clipboard.writeText(text).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button></div><p>{text}</p></div>;
+  return <div className="scene-prompt"><div><b>{label}</b><button type="button" title="Copies the full prompt including the product rules" onClick={() => void navigator.clipboard.writeText(`${rules}\n\nScene: ${text}`).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button></div><p>{text}</p></div>;
 }
 
 /** Lets the owner change a plan before making it: photo, caption, length and motion of each scene, scene order, and the words. */
@@ -47,8 +51,8 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
         <label>Seconds<input type="number" min={1} max={15} step={0.5} value={scene.durationMs / 1000} onChange={(event) => setScene(index, "durationMs", Math.round(Math.min(15, Math.max(1, Number(event.target.value) || 1)) * 1000))} /></label>
         <label>Motion<select value={scene.motion} onChange={(event) => setScene(index, "motion", event.target.value)}>{Object.entries(motionLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       </div>
-      <label>OpenAI image prompt<textarea rows={3} value={scene.imagePrompt ?? ""} maxLength={1500} onChange={(event) => setScene(index, "imagePrompt", event.target.value)} /></label>
-      <label>Kling / Seedance video prompt<textarea rows={3} value={scene.videoPrompt ?? ""} maxLength={1500} onChange={(event) => setScene(index, "videoPrompt", event.target.value)} /></label>
+      <label>AI image: this scene (product rules are added automatically)<textarea rows={3} value={scene.imagePrompt ?? ""} maxLength={1500} onChange={(event) => setScene(index, "imagePrompt", event.target.value)} /></label>
+      <label>Kling / Seedance video: this scene<textarea rows={3} value={scene.videoPrompt ?? ""} maxLength={1500} onChange={(event) => setScene(index, "videoPrompt", event.target.value)} /></label>
       <div className="scene-row">
         <button type="button" disabled={index === 0} onClick={() => move(index, -1)}>↑ Up</button>
         <button type="button" disabled={index === draft.scenes.length - 1} onClick={() => move(index, 1)}>↓ Down</button>
@@ -90,7 +94,7 @@ function PlanCard({ video, selected, working, onToggle, onEdit, onSceneImages }:
           {scene.imageStatus === "GENERATING" && <small className="muted">Making AI image…</small>}
           {scene.imageStatus === "FAILED" && <small className="error">AI image failed: {scene.imageError}</small>}
           {canMakeImages && scene.imagePrompt && <button type="button" className="link-button" disabled={working} onClick={() => onSceneImages([index])}>{hasAiImage(scene) || scene.imageStatus === "FAILED" ? "Make AI image again" : "Make AI image"}</button>}</div>
-        <CopyPrompt label="OpenAI image prompt" text={scene.imagePrompt} /><CopyPrompt label="Kling / Seedance video prompt" text={scene.videoPrompt} /></li>)}</ol>
+        <CopyPrompt label="AI image: this scene" text={scene.imagePrompt} rules={IMAGE_RULES} /><CopyPrompt label="Kling / Seedance video: this scene" text={scene.videoPrompt} rules={VIDEO_RULES} /></li>)}</ol>
     </details>
     {canMakeImages && <button type="button" disabled={working} onClick={() => onSceneImages()}>{aiCount ? `Make all ${plan.scenes.length} AI scene images again` : `Make AI scene images (${plan.scenes.length})`}</button>}
     {busyImages && <p className="muted small">OpenAI is making one image per scene from the main product photo. This takes about 1–2 minutes and refreshes automatically.</p>}

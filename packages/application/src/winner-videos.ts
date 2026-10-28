@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
-import { DomainError, VIDEO_PLAN_MOTIONS, VIDEO_PLAN_STYLES } from "@koolezt/domain";
+import { DomainError, sceneImagePrompt, VIDEO_PLAN_MOTIONS, VIDEO_PLAN_STYLES } from "@koolezt/domain";
 import type { CreativeDnaRepository, CreativeProvider, FactoryRepository, SceneImageProvider, StorageProvider, VideoPlan, VideoPlanMotion, VideoPlanScene, VideoPlanStyle, VoiceProvider, WinnerJob, WinnerJobRepository, WinnerVideo, WinnerVideoBatch, WinnerVideoRepository } from "@koolezt/domain";
 
 /** The renderer the service needs; implemented by PlanVideoRenderer in @koolezt/media. */
@@ -166,7 +166,7 @@ export class WinnerVideoService {
       try {
         if (!this.d.sceneImages) throw new DomainError("SCENE_IMAGES_UNAVAILABLE", "AI scene images need OPENAI_API_KEY on the server.");
         if (!reference) throw new DomainError("PRODUCT_PHOTOS_REQUIRED", "Add a main product photo first.");
-        const image = await this.d.sceneImages.generate({ prompt: scene.imagePrompt ?? "", referenceImages: [reference] });
+        const image = await this.d.sceneImages.generate({ prompt: sceneImagePrompt(scene.imagePrompt ?? ""), referenceImages: [reference] });
         const asset = await this.d.storage.put(`scene-images/${video.id}/${index + 1}-${randomUUID()}.${image.extension}`, { bytes: image.bytes, mimeType: image.mimeType, extension: image.extension, metadata: { projectId: batch.productId, purpose: "SCENE_IMAGE", model: image.model, originalFilename: `scene-${index + 1}.${image.extension}` } });
         scenes[index] = { ...scene, sceneImageAssetId: asset.id, imageStatus: "READY" };
       } catch (error) {

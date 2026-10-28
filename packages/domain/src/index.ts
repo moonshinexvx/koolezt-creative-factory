@@ -363,6 +363,10 @@ export type VideoPlanScene = Readonly<{
   photoAssetId: string; motion: VideoPlanMotion; caption: string; durationMs: number; imagePrompt?: string; videoPrompt?: string;
   sceneImageAssetId?: string; imageStatus?: SceneImageStatus; imageError?: string;
 }>;
+/** Product rules added in front of every scene's own image prompt, so each prompt only has to describe its scene. Keep in sync with apps/web/src/make-videos.tsx. */
+export const SCENE_IMAGE_PRODUCT_RULES = "Use the attached product photo as the exact product. Keep its shape, colors, printed artwork, text and proportions identical; do not redraw, warp or restyle it. Vertical 9:16 photorealistic photo. No added text, logos or watermarks.";
+export const SCENE_VIDEO_PRODUCT_RULES = "The product stays completely still and unchanged: no morphing, no new text, no warping of the printed artwork.";
+export const sceneImagePrompt = (scenePrompt: string) => `${SCENE_IMAGE_PRODUCT_RULES}\n\nScene: ${scenePrompt.trim()}`;
 /** Makes one scene image from a prompt and reference product photos. */
 export interface SceneImageProvider {
   readonly model: string;
