@@ -25,8 +25,7 @@ try {
     const n = Number((await pool.query(`SELECT count(*)::int AS n FROM ${link.from_table} WHERE ${link.column_name} IS NOT NULL`)).rows[0].n);
     if (n) blockers.push(`${link.from_table}.${link.column_name} -> ${link.to_table} (${n} rows)`);
   }
-  if (blockers.length) throw new Error(`Other data still points at what would be deleted; nothing was changed:${blockers.map((line) => `
-  ${line}`).join("")}`);
+  if (blockers.length) throw new Error(`Other data still points at what would be deleted; nothing was changed: ${blockers.join("; ")}`);
   console.log(`media files: ${media.filter((item) => item.storage_provider === "s3").length} in S3, ${media.filter((item) => item.storage_provider !== "s3").length} local`);
   if (!apply) {
     console.log("DRY RUN: nothing was deleted. Everything above except products and product_claims will be removed with --apply.");
