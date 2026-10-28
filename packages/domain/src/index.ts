@@ -353,9 +353,13 @@ export interface WinnerJobRepository {
 
 export const VIDEO_PLAN_MOTIONS = ["ZOOM_IN", "ZOOM_OUT", "PAN_LEFT", "PAN_RIGHT"] as const;
 export type VideoPlanMotion = (typeof VIDEO_PLAN_MOTIONS)[number];
-export type VideoPlanScene = Readonly<{ photoAssetId: string; motion: VideoPlanMotion; caption: string; durationMs: number }>;
-/** One new video based on a winner: what it keeps, what it changes, and exactly what to render. */
-export type VideoPlan = Readonly<{ title: string; keepsFromWinner: string; changes: string; hookText: string; voiceover: string; scenes: readonly VideoPlanScene[]; ctaText: string }>;
+/** PHOTO_MOTION: smooth zoom/pan with fades. STOP_MOTION: the same photos moved in small jumps at about 7 frames a second, with hand-made shake, flicker and hard cuts. */
+export const VIDEO_PLAN_STYLES = ["PHOTO_MOTION", "STOP_MOTION"] as const;
+export type VideoPlanStyle = (typeof VIDEO_PLAN_STYLES)[number];
+/** imagePrompt and videoPrompt are ready to paste into OpenAI image generation and Kling/Seedance image-to-video; the app does not call those services yet. */
+export type VideoPlanScene = Readonly<{ photoAssetId: string; motion: VideoPlanMotion; caption: string; durationMs: number; imagePrompt?: string; videoPrompt?: string }>;
+/** One new video based on a winner: what it keeps, what it changes, and exactly what to render. Plans written before styles existed have no style and render as PHOTO_MOTION. */
+export type VideoPlan = Readonly<{ title: string; keepsFromWinner: string; changes: string; hookText: string; voiceover: string; scenes: readonly VideoPlanScene[]; ctaText: string; style?: VideoPlanStyle }>;
 export type WinnerVideoBatchStatus = "WRITING" | "READY" | "FAILED";
 export type WinnerVideoBatch = Readonly<{
   id: string; creativeReferenceId: string; productId: string; requestedCount: 3 | 6 | 12; targetDurationMs: 15_000 | 30_000;
@@ -377,7 +381,7 @@ export interface WinnerVideoRepository {
   listVideos(batchId?: string): Promise<readonly WinnerVideo[]>;
 }
 export type VideoPlanInput = Readonly<{
-  requestedCount: 3 | 6 | 12; targetDurationMs: number;
+  requestedCount: 3 | 6 | 12; targetDurationMs: number; style: VideoPlanStyle;
   product: Readonly<{ name: string; description: string; facts: readonly string[]; lookRules?: unknown }>;
   photos: readonly Readonly<{ index: number; label: string; mimeType: string; bytesBase64: string }>[];
   winner: Readonly<{ name: string; report?: unknown; dna?: unknown; measurements?: unknown; metaResults?: unknown }>;

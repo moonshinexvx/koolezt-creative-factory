@@ -184,7 +184,7 @@ export class FakeCreativeProvider implements CreativeProvider {
     const plans = Array.from({ length: input.requestedCount }, (_, i) => ({
       title: `Variation ${i + 1}`, keepsFromWinner: "Keeps the product visible from the first second.", changes: `Tests hook ${i + 1}.`,
       hookText: `Hook number ${i + 1}`, voiceover: `This is fake voiceover number ${i + 1} for ${input.product.name}.`, ctaText: "Shop now",
-      scenes: [0, 1, 2].map((s) => ({ photo: input.photos.length ? (s % input.photos.length) + 1 : 1, motion: motions[(i + s) % motions.length], caption: `Caption ${s + 1}`, seconds: seconds / 3 }))
+      scenes: [0, 1, 2].map((s) => ({ photo: input.photos.length ? (s % input.photos.length) + 1 : 1, motion: motions[(i + s) % motions.length], caption: `Caption ${s + 1}`, seconds: seconds / 3, imagePrompt: `Use the attached product photo as the exact product. Fake scene ${s + 1}.`, videoPrompt: `Slow push-in, product stays still. Fake scene ${s + 1}.` }))
     }));
     return { plans, submission: { provider: "fake", model: "fake-video-plans-v1", providerTaskId: `fake-plans-${context.operationKey}`, requestId: `fake-plans-${context.operationKey}`, metadata: { operationKey: context.operationKey } } };
   }

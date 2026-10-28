@@ -52,3 +52,9 @@
 .scene-photos img{width:52px;height:52px;object-fit:cover;border-radius:4px;display:block}
 .scene-row{display:flex;flex-wrap:wrap;gap:8px;align-items:end}
 .scene-row label{flex:1;min-width:90px}
+.plan-style{justify-self:start;padding:1px 8px;border-radius:999px;font-size:12px;background:#f1ecfa;color:#4b2f86}
+.plan-scenes li{grid-template-columns:48px 1fr}
+.scene-prompt{grid-column:1/-1;display:grid;gap:4px;padding:6px 8px;border-radius:6px;background:#f6f8fb;font-size:12px}
+.scene-prompt div{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.scene-prompt p{margin:0;white-space:pre-wrap;color:#34495f}
+.scene-prompt button{padding:2px 8px;font-size:12px}

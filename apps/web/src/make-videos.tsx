@@ -3,7 +3,14 @@ import { api } from "./api.js";
 
 const motionLabel: Record<string, string> = { ZOOM_IN: "slow zoom in", ZOOM_OUT: "slow zoom out", PAN_LEFT: "pan left", PAN_RIGHT: "pan right" };
 const statusLabel: Record<string, string> = { PLANNED: "Plan", QUEUED: "Waiting to be made", RENDERING: "Making video…", READY: "Video ready", FAILED: "Failed" };
+const styleLabel: Record<string, string> = { PHOTO_MOTION: "Photo motion", STOP_MOTION: "Stop motion" };
 const seconds = (ms: number) => `${Math.round(ms / 100) / 10}s`;
+
+function CopyPrompt({ label, text }: Readonly<{ label: string; text?: string }>) {
+  const [copied, setCopied] = useState(false);
+  if (!text) return null;
+  return <div className="scene-prompt"><div><b>{label}</b><button type="button" onClick={() => void navigator.clipboard.writeText(text).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button></div><p>{text}</p></div>;
+}
 
 /** Lets the owner change a plan before making it: photo, caption, length and motion of each scene, scene order, and the words. */
 function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any; photos: readonly any[]; onSaved: () => Promise<void>; onCancel: () => void }>) {
@@ -27,6 +34,7 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
     <label>Hook (first 3s, on screen)<input value={draft.hookText} maxLength={60} onChange={(event) => set("hookText", event.target.value)} /></label>
     <label>Voiceover<textarea rows={4} value={draft.voiceover} maxLength={900} onChange={(event) => set("voiceover", event.target.value)} /></label>
     <label>Call to action (last scene)<input value={draft.ctaText} maxLength={40} onChange={(event) => set("ctaText", event.target.value)} /></label>
+    <label>Style<select value={draft.style ?? "PHOTO_MOTION"} onChange={(event) => set("style", event.target.value)}>{Object.entries(styleLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
     <b>Scenes</b>
     <ol className="scene-editor">{draft.scenes.map((scene: any, index: number) => <li key={index}>
       <div className="scene-photos">{photos.map((photo: any) => <button type="button" key={photo.id} className={photo.id === scene.photoAssetId ? "chosen" : ""} title={photo.label} onClick={() => setScene(index, "photoAssetId", photo.id)}><img src={`/api/assets/${photo.id}`} alt={photo.label} /></button>)}</div>
@@ -35,6 +43,8 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
         <label>Seconds<input type="number" min={1} max={15} step={0.5} value={scene.durationMs / 1000} onChange={(event) => setScene(index, "durationMs", Math.round(Math.min(15, Math.max(1, Number(event.target.value) || 1)) * 1000))} /></label>
         <label>Motion<select value={scene.motion} onChange={(event) => setScene(index, "motion", event.target.value)}>{Object.entries(motionLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       </div>
+      <label>OpenAI image prompt<textarea rows={3} value={scene.imagePrompt ?? ""} maxLength={1500} onChange={(event) => setScene(index, "imagePrompt", event.target.value)} /></label>
+      <label>Kling / Seedance video prompt<textarea rows={3} value={scene.videoPrompt ?? ""} maxLength={1500} onChange={(event) => setScene(index, "videoPrompt", event.target.value)} /></label>
       <div className="scene-row">
         <button type="button" disabled={index === 0} onClick={() => move(index, -1)}>↑ Up</button>
         <button type="button" disabled={index === draft.scenes.length - 1} onClick={() => move(index, 1)}>↓ Down</button>
@@ -56,6 +66,7 @@ function PlanCard({ video, selected, onToggle, onEdit }: Readonly<{ video: any; 
     <header>
       {selectable ? <label className="plan-select"><input type="checkbox" checked={selected} onChange={onToggle} /> Make this video</label> : <span className={`plan-status ${video.status.toLowerCase()}`}>{statusLabel[video.status] ?? video.status}</span>}
       <h4>{video.ordinal}. {plan.title}</h4>
+      <span className="plan-style">{styleLabel[plan.style ?? "PHOTO_MOTION"]}</span>
     </header>
     {video.status === "READY" && video.outputAssetId && <div className="plan-video"><video controls preload="metadata" src={`/api/assets/${video.outputAssetId}`} /><a className="button primary" href={`/api/videos/${video.id}/download`}>Download MP4</a></div>}
     {video.status === "PLANNED" && video.outputAssetId && <div className="plan-video"><small className="muted">Video from before your edits (make it again to update):</small><video controls preload="metadata" src={`/api/assets/${video.outputAssetId}`} /></div>}
@@ -68,7 +79,8 @@ function PlanCard({ video, selected, onToggle, onEdit }: Readonly<{ video: any; 
     </dl>
     <details><summary>Voiceover and scenes</summary>
       <p className="voiceover">"{plan.voiceover}"</p>
-      <ol className="plan-scenes">{plan.scenes.map((scene: any, index: number) => <li key={index}><img src={`/api/assets/${scene.photoAssetId}`} alt="" /><div><b>{scene.caption || "No caption"}</b><small>{seconds(scene.durationMs)} · {motionLabel[scene.motion] ?? scene.motion}</small></div></li>)}</ol>
+      <ol className="plan-scenes">{plan.scenes.map((scene: any, index: number) => <li key={index}><img src={`/api/assets/${scene.photoAssetId}`} alt="" /><div><b>{scene.caption || "No caption"}</b><small>{seconds(scene.durationMs)} · {motionLabel[scene.motion] ?? scene.motion}</small></div>
+        <CopyPrompt label="OpenAI image prompt" text={scene.imagePrompt} /><CopyPrompt label="Kling / Seedance video prompt" text={scene.videoPrompt} /></li>)}</ol>
     </details>
     {editable && <button type="button" onClick={onEdit}>{video.status === "READY" ? "Edit and make again" : "Edit photos and scenes"}</button>}
   </article>;
@@ -79,6 +91,7 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
   const [batches, setBatches] = useState<any[]>([]);
   const [count, setCount] = useState<3 | 6 | 12>(6);
   const [length, setLength] = useState<15 | 30>(15);
+  const [style, setStyle] = useState<"PHOTO_MOTION" | "STOP_MOTION">("PHOTO_MOTION");
   const [selected, setSelected] = useState<string[]>([]);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
@@ -103,11 +116,12 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
   return <section className="card make-videos">
     <h3>Make new videos from this winner</h3>
     {!reportReady ? <p className="muted">Available once the analysis report is ready.</p> : <>
-      <p className="muted">Claude writes video plans that keep what made this ad work and change one thing each. You choose which ones to make; videos are built from your product photos with captions and an AI voiceover.</p>
+      <p className="muted">Claude writes video plans that keep what made this ad work and change one thing each. You choose which ones to make; videos are built from your product photos with captions and an AI voiceover. Each scene also gets an OpenAI image prompt and a Kling/Seedance video prompt you can copy.</p>
       <div className="make-controls">
         <label>How many<select value={count} onChange={(event) => setCount(Number(event.target.value) as 3 | 6 | 12)}><option value={3}>3 videos</option><option value={6}>6 videos</option><option value={12}>12 videos</option></select></label>
         <label>Length<select value={length} onChange={(event) => setLength(Number(event.target.value) as 15 | 30)}><option value={15}>15 seconds</option><option value={30}>30 seconds</option></select></label>
-        <button className="primary" disabled={working || writing} onClick={() => void run(() => api(`/api/creative-references/${referenceId}/video-plans`, "POST", { count, durationSeconds: length }), "Could not start writing plans.")}>{writing ? "Writing plans…" : `Write ${count} video plans`}</button>
+        <label>Style<select value={style} onChange={(event) => setStyle(event.target.value as "PHOTO_MOTION" | "STOP_MOTION")}><option value="PHOTO_MOTION">Photo motion (smooth zoom and pan)</option><option value="STOP_MOTION">Stop motion (hand-made jumps)</option></select></label>
+        <button className="primary" disabled={working || writing} onClick={() => void run(() => api(`/api/creative-references/${referenceId}/video-plans`, "POST", { count, durationSeconds: length, style }), "Could not start writing plans.")}>{writing ? "Writing plans…" : `Write ${count} video plans`}</button>
       </div>
     </>}
     {error && <p className="error" role="alert">{error}</p>}

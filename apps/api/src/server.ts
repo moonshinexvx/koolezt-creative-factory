@@ -6,7 +6,7 @@ import { z, ZodError } from "zod";
 import {  randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import {  productInput } from "@koolezt/contracts";
-import { DomainError, VIDEO_PLAN_MOTIONS } from "@koolezt/domain";
+import { DomainError, VIDEO_PLAN_MOTIONS, VIDEO_PLAN_STYLES } from "@koolezt/domain";
 import { createRuntime } from "./runtime.js";
 import type { BrowserIdentity } from "./browser-auth.js";
 
@@ -123,12 +123,12 @@ export function buildServer(runtime: Runtime = createRuntime()) {
   app.put("/api/creative-references/:id/dna",async(request)=>runtime.creativeDnaService.edit((request.params as{id:string}).id,body(dnaDraftInput,request.body),actor(request)));
   app.post("/api/creative-references/:id/dna/:revisionId/approve",async(request)=>runtime.creativeDnaService.approve((request.params as{id:string;revisionId:string}).id,(request.params as{id:string;revisionId:string}).revisionId,actor(request)));
   // Winner-to-video: write plans from an analyzed winner, then make the chosen videos on the server.
-  const videoPlanRequestInput=z.object({count:z.union([z.literal(3),z.literal(6),z.literal(12)]),durationSeconds:z.union([z.literal(15),z.literal(30)]).default(15)});
-  app.post("/api/creative-references/:id/video-plans",async(request,reply)=>{const input=body(videoPlanRequestInput,request.body);return reply.code(202).send(await runtime.winnerVideos.requestPlans({referenceId:(request.params as{id:string}).id,count:input.count,durationSeconds:input.durationSeconds,actor:actor(request as unknown as AuthenticatedRequest)}));});
+  const videoPlanRequestInput=z.object({count:z.union([z.literal(3),z.literal(6),z.literal(12)]),durationSeconds:z.union([z.literal(15),z.literal(30)]).default(15),style:z.enum(VIDEO_PLAN_STYLES).default("PHOTO_MOTION")});
+  app.post("/api/creative-references/:id/video-plans",async(request,reply)=>{const input=body(videoPlanRequestInput,request.body);return reply.code(202).send(await runtime.winnerVideos.requestPlans({referenceId:(request.params as{id:string}).id,count:input.count,durationSeconds:input.durationSeconds,style:input.style,actor:actor(request as unknown as AuthenticatedRequest)}));});
   app.get("/api/video-batches",async(request)=>{const query=request.query as{referenceId?:unknown};return runtime.winnerVideos.list(typeof query.referenceId==="string"?query.referenceId:undefined);});
   app.post("/api/video-batches/:id/make",async(request,reply)=>{const input=body(z.object({videoIds:z.array(z.string().uuid()).min(1).max(12)}),request.body);return reply.code(202).send(await runtime.winnerVideos.makeVideos((request.params as{id:string}).id,input.videoIds));});
-  const scenePlanInput=z.object({photoAssetId:z.string().uuid(),motion:z.enum(VIDEO_PLAN_MOTIONS),caption:z.string().trim().max(80),durationMs:z.number().int().min(1000).max(15000)});
-  const videoPlanInput=z.object({title:z.string().trim().min(1).max(120),keepsFromWinner:z.string().trim().max(300).default(""),changes:z.string().trim().max(300).default(""),hookText:z.string().trim().max(60),voiceover:z.string().trim().min(1).max(900),scenes:z.array(scenePlanInput).min(2).max(8),ctaText:z.string().trim().max(40)});
+  const scenePlanInput=z.object({photoAssetId:z.string().uuid(),motion:z.enum(VIDEO_PLAN_MOTIONS),caption:z.string().trim().max(80),durationMs:z.number().int().min(1000).max(15000),imagePrompt:z.string().trim().max(1500).default(""),videoPrompt:z.string().trim().max(1500).default("")});
+  const videoPlanInput=z.object({title:z.string().trim().min(1).max(120),keepsFromWinner:z.string().trim().max(300).default(""),changes:z.string().trim().max(300).default(""),hookText:z.string().trim().max(60),voiceover:z.string().trim().min(1).max(900),scenes:z.array(scenePlanInput).min(2).max(8),ctaText:z.string().trim().max(40),style:z.enum(VIDEO_PLAN_STYLES).default("PHOTO_MOTION")});
   app.put("/api/videos/:id/plan",async(request)=>runtime.winnerVideos.editPlan((request.params as{id:string}).id,body(videoPlanInput,request.body)));
   app.get("/api/videos/:id/download",async(request,reply)=>{const video=await runtime.winnerVideoStore.getVideo((request.params as{id:string}).id);if(video.status!=="READY"||!video.outputAssetId)throw new DomainError("VIDEO_NOT_READY","This video is not ready yet.");const asset=await runtime.storage.getAsset(video.outputAssetId);const filename=`${video.plan.title.replace(/[^A-Za-z0-9._ -]/g,"").trim().replace(/\s+/g,"-").slice(0,80)||"video"}.mp4`;if(asset.storageProvider==="s3"&&runtime.durableMediaStore){const reference=await runtime.durableMediaStore.getDownloadReference(asset.id,{downloadFilename:filename});return reply.redirect(reference.url);}return reply.header("Content-Type","video/mp4").header("Content-Disposition",`attachment; filename="${filename}"`).send(Buffer.from(await runtime.storage.read(asset.storageKey)));});
 

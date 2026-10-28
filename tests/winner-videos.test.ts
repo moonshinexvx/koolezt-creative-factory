@@ -167,4 +167,24 @@ describe("winner to videos", () => {
       await expect(setup.service.editPlan(first!.id, edited.plan)).rejects.toMatchObject({ code: "VIDEO_BUSY" });
     } finally { await setup.dispose(); }
   });
+
+  it("writes stop-motion plans with image and video prompts per scene and renders them for real", async () => {
+    const setup = await harness({ renderer: new PlanVideoRenderer({ ffmpegPath: ffmpeg, ffprobePath: ffprobe, lowPriority: false }) });
+    try {
+      await setup.dnaService.requestAnalysis(setup.reference.id, crypto.randomUUID());
+      await setup.drain();
+      const plansSpy = vi.spyOn(setup.provider, "planWinnerVideos");
+      const batch = await setup.service.requestPlans({ referenceId: setup.reference.id, count: 3, durationSeconds: 15, style: "STOP_MOTION", actor: "owner" });
+      await setup.drain();
+      expect(plansSpy.mock.calls[0]![0]).toMatchObject({ style: "STOP_MOTION" });
+      const [video] = await setup.videos.listVideos(batch.id);
+      expect(video!.plan.style).toBe("STOP_MOTION");
+      expect(video!.plan.scenes[0]).toMatchObject({ imagePrompt: expect.stringContaining("exact product"), videoPrompt: expect.stringContaining("product stays still") });
+      await setup.service.makeVideos(batch.id, [video!.id]);
+      await setup.drain();
+      const made = await setup.videos.getVideo(video!.id);
+      expect(made).toMatchObject({ status: "READY" });
+      expect(made.durationMs).toBeGreaterThanOrEqual(14_500);
+    } finally { await setup.dispose(); }
+  }, 120_000);
 });

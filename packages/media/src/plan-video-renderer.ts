@@ -4,19 +4,22 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DomainError } from "@koolezt/domain";
-import type { VideoPlanMotion } from "@koolezt/domain";
+import type { VideoPlanMotion, VideoPlanStyle } from "@koolezt/domain";
 
 export const PLAN_VIDEO_WIDTH = 1080;
 export const PLAN_VIDEO_HEIGHT = 1920;
 export const PLAN_VIDEO_FPS = 30;
 const TRANSITION_MS = 300;
+/** Stop motion: a hard cut (one frame) between scenes, and the picture moves only every STOP_MOTION_STEP frames (about 7.5 a second). */
+const CUT_MS = 34;
+const STOP_MOTION_STEP = 4;
 const VOICE_LEAD_IN_MS = 300;
 const VOICE_TAIL_MS = 700;
 const CTA_MS = 2_500;
 const MOTION_ZOOM = 0.12;
 
 export type PlanRenderScene = Readonly<{ photoPath: string; photoWidth: number; photoHeight: number; motion: VideoPlanMotion; caption: string; durationMs: number }>;
-export type PlanRenderInput = Readonly<{ scenes: readonly PlanRenderScene[]; hookText: string; ctaText: string; voicePath: string; voiceDurationMs: number; targetDurationMs: number }>;
+export type PlanRenderInput = Readonly<{ scenes: readonly PlanRenderScene[]; hookText: string; ctaText: string; voicePath: string; voiceDurationMs: number; targetDurationMs: number; style?: VideoPlanStyle }>;
 
 /** Greedy word wrap; words longer than a line are kept whole rather than split mid-word. */
 export function wrapText(text: string, maxChars: number, maxLines: number): string[] {
@@ -50,8 +53,9 @@ export function foregroundBox(width: number, height: number): Readonly<{ width: 
   return { width: even(width), height: even(height) };
 }
 
-function motionExpressions(motion: VideoPlanMotion, frames: number): Readonly<{ z: string; x: string; y: string }> {
-  const progress = `min(on/${Math.max(1, frames - 1)},1)`;
+function motionExpressions(motion: VideoPlanMotion, frames: number, stepped = false): Readonly<{ z: string; x: string; y: string }> {
+  const frame = stepped ? `floor(on/${STOP_MOTION_STEP})*${STOP_MOTION_STEP}` : "on";
+  const progress = `min(${frame}/${Math.max(1, frames - 1)},1)`;
   const centerX = "iw/2-(iw/zoom/2)";
   const centerY = "ih/2-(ih/zoom/2)";
   if (motion === "ZOOM_OUT") return { z: `${1 + MOTION_ZOOM}-${MOTION_ZOOM}*${progress}`, x: centerX, y: centerY };
@@ -70,34 +74,41 @@ type TextLayer = Readonly<{ file: string; fontSize: number; y: number; startMs: 
 /** Builds the FFmpeg argument list for one plan video. Pure: the caller writes the text files it references. */
 export function buildPlanVideoArguments(input: Readonly<{
   scenes: readonly PlanRenderScene[]; sceneMs: readonly number[]; totalMs: number; voicePath: string; outputPath: string;
-  fontPath: string; textLayers: readonly TextLayer[]; threads: number;
+  fontPath: string; textLayers: readonly TextLayer[]; threads: number; style?: VideoPlanStyle;
 }>): string[] {
   const args = ["-hide_banner", "-loglevel", "error", "-y"];
   const last = input.scenes.length - 1;
+  const stop = input.style === "STOP_MOTION";
+  const transitionMs = stop ? CUT_MS : TRANSITION_MS;
   input.scenes.forEach((scene, index) => {
-    const clipMs = input.sceneMs[index]! + (index < last ? TRANSITION_MS : 0);
+    const clipMs = input.sceneMs[index]! + (index < last ? transitionMs : 0);
     args.push("-loop", "1", "-framerate", String(PLAN_VIDEO_FPS), "-t", (clipMs / 1000).toFixed(3), "-i", scene.photoPath);
   });
   args.push("-i", input.voicePath);
   const filters: string[] = [];
   input.scenes.forEach((scene, index) => {
-    const clipMs = input.sceneMs[index]! + (index < last ? TRANSITION_MS : 0);
+    const clipMs = input.sceneMs[index]! + (index < last ? transitionMs : 0);
     const frames = Math.round((clipMs / 1000) * PLAN_VIDEO_FPS);
     const box = foregroundBox(scene.photoWidth, scene.photoHeight);
-    const motion = motionExpressions(scene.motion, frames);
+    const motion = motionExpressions(scene.motion, frames, stop);
+    // Stop motion: the photo tilts and shifts a little on every step, and the light flickers, like frames shot by hand.
+    const step = `floor(n/${STOP_MOTION_STEP})`;
+    const tilt = stop ? `,format=rgba,rotate=a='0.018*sin(${step}*7.13+${index})':c=none` : "";
+    const position = stop ? `x='(W-w)/2+9*sin(${step}*12.99+${index})':y='(H-h)/2-140+9*cos(${step}*7.77+${index})':eval=frame` : "(W-w)/2:(H-h)/2-140";
+    const handmade = stop ? `,eq=brightness='0.025*sin(${step}*3.7)':eval=frame,noise=alls=7:allf=t` : "";
     // Upscaling before zoompan keeps slow zooms smooth instead of stepping a pixel at a time.
     filters.push(
       `[${index}:v]split[bgsrc${index}][fgsrc${index}]`,
       `[bgsrc${index}]scale=${PLAN_VIDEO_WIDTH}:${PLAN_VIDEO_HEIGHT}:force_original_aspect_ratio=increase,crop=${PLAN_VIDEO_WIDTH}:${PLAN_VIDEO_HEIGHT},gblur=sigma=30,eq=brightness=-0.06[bg${index}]`,
-      `[fgsrc${index}]scale=${box.width * 2}:${box.height * 2},zoompan=z='${motion.z}':x='${motion.x}':y='${motion.y}':d=1:s=${box.width}x${box.height}:fps=${PLAN_VIDEO_FPS}[fg${index}]`,
-      `[bg${index}][fg${index}]overlay=(W-w)/2:(H-h)/2-140:shortest=1,trim=duration=${(clipMs / 1000).toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p[s${index}]`
+      `[fgsrc${index}]scale=${box.width * 2}:${box.height * 2},zoompan=z='${motion.z}':x='${motion.x}':y='${motion.y}':d=1:s=${box.width}x${box.height}:fps=${PLAN_VIDEO_FPS}${tilt}[fg${index}]`,
+      `[bg${index}][fg${index}]overlay=${position}:shortest=1${handmade},trim=duration=${(clipMs / 1000).toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p[s${index}]`
     );
   });
   let stream = "s0";
   let offsetMs = 0;
   for (let index = 1; index <= last; index++) {
     offsetMs += input.sceneMs[index - 1]!;
-    filters.push(`[${stream}][s${index}]xfade=transition=fade:duration=${(TRANSITION_MS / 1000).toFixed(3)}:offset=${(offsetMs / 1000).toFixed(3)}[x${index}]`);
+    filters.push(`[${stream}][s${index}]xfade=transition=fade:duration=${(transitionMs / 1000).toFixed(3)}:offset=${(offsetMs / 1000).toFixed(3)}[x${index}]`);
     stream = `x${index}`;
   }
   const font = filterPath(input.fontPath);
@@ -176,7 +187,7 @@ export class PlanVideoRenderer {
       }
       if (input.ctaText.trim()) await addText("cta", input.ctaText, 20, 2, { fontSize: 68, box: "0xE95B28@0.92", startMs: totalMs - CTA_MS, endMs: totalMs, y: Math.round(PLAN_VIDEO_HEIGHT * 0.78), lineHeight: 100 });
       const outputPath = join(root, "video.mp4");
-      const args = buildPlanVideoArguments({ scenes: input.scenes, sceneMs, totalMs, voicePath: input.voicePath, outputPath, fontPath, textLayers: layers, threads: this.options.threads ?? 2 });
+      const args = buildPlanVideoArguments({ scenes: input.scenes, sceneMs, totalMs, voicePath: input.voicePath, outputPath, fontPath, textLayers: layers, threads: this.options.threads ?? 2, ...(input.style ? { style: input.style } : {}) });
       const lowPriority = (this.options.lowPriority ?? true) && process.platform === "linux";
       // nice 19 + ionice idle: the kernel serves every other process first.
       if (lowPriority) await runProcess("nice", ["-n", "19", "ionice", "-c", "3", this.ffmpeg, ...args], this.options.timeoutMs ?? 600_000);

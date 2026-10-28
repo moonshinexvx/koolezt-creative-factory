@@ -255,7 +255,7 @@ export class ClaudeCreativeProvider implements CreativeProvider {
     const images = photos.map((photo): ImageBlock => ({ type: "image", source: { type: "base64", media_type: photo.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: photo.bytesBase64 } }));
     try {
       const result = await this.call({
-        system: VIDEO_PLAN_INSTRUCTIONS(input.requestedCount, Math.round(input.targetDurationMs / 1000)),
+        system: VIDEO_PLAN_INSTRUCTIONS(input.requestedCount, Math.round(input.targetDurationMs / 1000), input.style),
         payload: { operationKey: context.operationKey, ...rest, photos: photos.map((photo) => ({ number: photo.index, label: photo.label })) },
         images, schema: videoPlansSchema, effort: this.backgroundEffort, timeoutMs: this.backgroundTimeoutMs, invalidCode: "CLAUDE_VIDEO_PLANS_INVALID"
       });

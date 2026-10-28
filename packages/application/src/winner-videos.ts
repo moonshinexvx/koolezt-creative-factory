@@ -2,15 +2,15 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
-import { DomainError, VIDEO_PLAN_MOTIONS } from "@koolezt/domain";
-import type { CreativeDnaRepository, CreativeProvider, FactoryRepository, StorageProvider, VideoPlan, VideoPlanMotion, VoiceProvider, WinnerJob, WinnerJobRepository, WinnerVideo, WinnerVideoBatch, WinnerVideoRepository } from "@koolezt/domain";
+import { DomainError, VIDEO_PLAN_MOTIONS, VIDEO_PLAN_STYLES } from "@koolezt/domain";
+import type { CreativeDnaRepository, CreativeProvider, FactoryRepository, StorageProvider, VideoPlan, VideoPlanMotion, VideoPlanStyle, VoiceProvider, WinnerJob, WinnerJobRepository, WinnerVideo, WinnerVideoBatch, WinnerVideoRepository } from "@koolezt/domain";
 
 /** The renderer the service needs; implemented by PlanVideoRenderer in @koolezt/media. */
 export interface VideoRenderer {
   probe(path: string): Promise<Readonly<{ width?: number; height?: number; durationMs?: number }>>;
   render(input: Readonly<{
     scenes: readonly Readonly<{ photoPath: string; photoWidth: number; photoHeight: number; motion: VideoPlanMotion; caption: string; durationMs: number }>[];
-    hookText: string; ctaText: string; voicePath: string; voiceDurationMs: number; targetDurationMs: number;
+    hookText: string; ctaText: string; voicePath: string; voiceDurationMs: number; targetDurationMs: number; style?: VideoPlanStyle;
   }>): Promise<Readonly<{ bytes: Uint8Array; durationMs: number }>>;
 }
 
@@ -23,7 +23,7 @@ const text = (value: unknown, max: number) => (typeof value === "string" ? value
 const words = (value: string, max: number) => value.split(" ").filter(Boolean).slice(0, max).join(" ");
 
 /** Turns the model's plan into something the renderer can always build; photo numbers outside the list are dropped. */
-export function canonicalizeVideoPlan(value: unknown, photoAssetIds: readonly string[], targetDurationMs: number): VideoPlan | undefined {
+export function canonicalizeVideoPlan(value: unknown, photoAssetIds: readonly string[], targetDurationMs: number, style: VideoPlanStyle = "PHOTO_MOTION"): VideoPlan | undefined {
   const raw = (value && typeof value === "object" ? value : {}) as Raw;
   const scenes = (Array.isArray(raw.scenes) ? raw.scenes : []).flatMap((item) => {
     const scene = (item && typeof item === "object" ? item : {}) as Raw;
@@ -32,7 +32,9 @@ export function canonicalizeVideoPlan(value: unknown, photoAssetIds: readonly st
     if (!photoAssetId) return [];
     const motion = VIDEO_PLAN_MOTIONS.includes(scene.motion as VideoPlanMotion) ? scene.motion as VideoPlanMotion : "ZOOM_IN";
     const seconds = Number(scene.seconds);
-    return [{ photoAssetId, motion, caption: words(text(scene.caption, 80), 9), durationMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 3000 }];
+    const imagePrompt = text(scene.imagePrompt, 1500);
+    const videoPrompt = text(scene.videoPrompt, 1500);
+    return [{ photoAssetId, motion, caption: words(text(scene.caption, 80), 9), durationMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 3000, ...(imagePrompt ? { imagePrompt } : {}), ...(videoPrompt ? { videoPrompt } : {}) }];
   }).slice(0, 5);
   const voiceover = text(raw.voiceover, 900);
   if (scenes.length < 2 || !voiceover) return undefined;
@@ -40,9 +42,11 @@ export function canonicalizeVideoPlan(value: unknown, photoAssetIds: readonly st
   const scaled = scenes.map((scene) => ({ ...scene, durationMs: Math.max(1500, Math.round((scene.durationMs / planned) * targetDurationMs)) }));
   return {
     title: text(raw.title, 120) || "New video", keepsFromWinner: text(raw.keepsFromWinner, 300), changes: text(raw.changes, 300),
-    hookText: words(text(raw.hookText, 60), 8), voiceover, scenes: scaled, ctaText: words(text(raw.ctaText, 40), 6)
+    hookText: words(text(raw.hookText, 60), 8), voiceover, scenes: scaled, ctaText: words(text(raw.ctaText, 40), 6), style
   };
 }
+
+const batchStyle = (batch: WinnerVideoBatch): VideoPlanStyle => VIDEO_PLAN_STYLES.includes(batch.providerMetadata.style as VideoPlanStyle) ? batch.providerMetadata.style as VideoPlanStyle : "PHOTO_MOTION";
 
 export class WinnerVideoService {
   constructor(private readonly d: Readonly<{
@@ -60,7 +64,7 @@ export class WinnerVideoService {
   }
 
   /** Starts writing new video plans from an analyzed winner. Writing runs in the worker; it costs one AI call. */
-  async requestPlans(input: Readonly<{ referenceId: string; count: 3 | 6 | 12; durationSeconds: 15 | 30; actor: string }>): Promise<WinnerVideoBatch> {
+  async requestPlans(input: Readonly<{ referenceId: string; count: 3 | 6 | 12; durationSeconds: 15 | 30; style?: VideoPlanStyle; actor: string }>): Promise<WinnerVideoBatch> {
     const reference = await this.d.dna.getReference(input.referenceId);
     const report = (await this.d.dna.listWinnerReports()).find((item) => item.creativeReferenceId === reference.id);
     if (!report || report.status !== "READY") throw new DomainError("WINNER_REPORT_REQUIRED", "Finish the winner's analysis report before making new videos from it.");
@@ -69,7 +73,7 @@ export class WinnerVideoService {
     if (!photos.length) throw new DomainError("PRODUCT_PHOTOS_REQUIRED", "Add at least one product photo before making videos.");
     if ((await this.d.videos.listBatches(reference.id)).some((batch) => batch.status === "WRITING")) throw new DomainError("VIDEO_PLANS_IN_PROGRESS", "Plans for this winner are already being written.");
     const now = this.now();
-    const batch: WinnerVideoBatch = { id: this.id(), creativeReferenceId: reference.id, productId: reference.productId, requestedCount: input.count, targetDurationMs: input.durationSeconds === 30 ? 30_000 : 15_000, status: "WRITING", providerMetadata: {}, createdBy: input.actor, createdAt: now, updatedAt: now };
+    const batch: WinnerVideoBatch = { id: this.id(), creativeReferenceId: reference.id, productId: reference.productId, requestedCount: input.count, targetDurationMs: input.durationSeconds === 30 ? 30_000 : 15_000, status: "WRITING", providerMetadata: { style: input.style ?? "PHOTO_MOTION" }, createdBy: input.actor, createdAt: now, updatedAt: now };
     await this.d.videos.createBatch(batch);
     await this.d.jobs.enqueue({ id: this.id(), kind: "WRITE_VIDEO_PLANS", targetId: batch.id, operationKey: `plans:${batch.id}`, status: "PENDING", attempts: 0, createdAt: now, updatedAt: now });
     return batch;
@@ -86,19 +90,20 @@ export class WinnerVideoService {
       const revisions = references.find((entry) => entry.reference.id === reference.id)?.revisions ?? [];
       const dna = revisions.find((revision) => revision.id === reference.approvedRevisionId) ?? revisions.at(-1);
       const photoPayload = await Promise.all(photos.map(async (photo, index) => ({ index: index + 1, label: photo.label, mimeType: photo.mimeType, bytesBase64: Buffer.from(await this.d.storage.read(photo.storageKey)).toString("base64") })));
+      const style = batchStyle(batch);
       const { plans, submission } = await this.d.provider.planWinnerVideos({
-        requestedCount: batch.requestedCount, targetDurationMs: batch.targetDurationMs,
+        requestedCount: batch.requestedCount, targetDurationMs: batch.targetDurationMs, style,
         product: { name: product.name, description: product.description, facts: product.claims.map((claim) => claim.text), ...(product.personalizationVisualAuthority ? { lookRules: product.personalizationVisualAuthority } : {}) },
         photos: photoPayload,
         winner: { name: reference.displayName, ...(report?.report ? { report: report.report } : {}), ...(dna ? { dna: { preserveTraits: dna.preserveTraits, safeToVaryTraits: dna.safeToVaryTraits, avoidTraits: dna.avoidTraits, openingPattern: dna.openingPattern, pacingPattern: dna.pacingPattern, ctaPattern: dna.ctaPattern } } : {}), ...(report?.measurements ? { measurements: { durationMs: report.measurements.durationMs, shotCount: report.measurements.shotCount, wordsPerMinute: report.measurements.wordsPerMinute, transcriptText: report.measurements.transcriptText } } : {}), ...(links.find((link) => link.creativeReferenceId === reference.id)?.metrics ? { metaResults: links.find((link) => link.creativeReferenceId === reference.id)!.metrics } : {}) }
       }, { operationKey: `plans:${batch.id}`, projectId: batch.productId, targetId: batch.id });
       const photoIds = photos.map((photo) => photo.id);
       const now = this.now();
-      const videos: WinnerVideo[] = plans.flatMap((value) => { const plan = canonicalizeVideoPlan(value, photoIds, batch.targetDurationMs); return plan ? [plan] : []; }).slice(0, batch.requestedCount)
+      const videos: WinnerVideo[] = plans.flatMap((value) => { const plan = canonicalizeVideoPlan(value, photoIds, batch.targetDurationMs, style); return plan ? [plan] : []; }).slice(0, batch.requestedCount)
         .map((plan, index) => ({ id: this.id(), batchId: batch.id, ordinal: index + 1, plan, status: "PLANNED" as const, createdAt: now, updatedAt: now }));
       if (!videos.length) throw new DomainError("VIDEO_PLANS_INVALID", "The AI did not return any usable video plans. Try again.");
       await this.d.videos.saveVideos(videos);
-      await this.d.videos.updateBatch({ ...batch, status: "READY", providerMetadata: { provider: submission.provider, model: submission.model, ...submission.metadata }, updatedAt: now });
+      await this.d.videos.updateBatch({ ...batch, status: "READY", providerMetadata: { style, provider: submission.provider, model: submission.model, ...submission.metadata }, updatedAt: now });
       return { status: "COMPLETED" };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Writing plans failed.";
@@ -164,7 +169,7 @@ export class WinnerVideoService {
         const size = await this.d.renderer.probe(photoPath);
         scenes.push({ photoPath, photoWidth: size.width ?? 1080, photoHeight: size.height ?? 1080, motion: scene.motion, caption: scene.caption, durationMs: scene.durationMs });
       }
-      const rendered = await this.d.renderer.render({ scenes, hookText: video.plan.hookText, ctaText: video.plan.ctaText, voicePath: voiceFile, voiceDurationMs, targetDurationMs: batch.targetDurationMs });
+      const rendered = await this.d.renderer.render({ scenes, hookText: video.plan.hookText, ctaText: video.plan.ctaText, voicePath: voiceFile, voiceDurationMs, targetDurationMs: batch.targetDurationMs, style: video.plan.style ?? "PHOTO_MOTION" });
       const asset = await this.d.storage.put(`winner-videos/${batch.id}/${video.id}.mp4`, { bytes: rendered.bytes, mimeType: "video/mp4", extension: "mp4", metadata: { projectId: batch.productId, purpose: "WINNER_VIDEO", originalFilename: `${video.plan.title.slice(0, 80)}.mp4` } });
       await this.d.videos.updateVideo({ ...video, status: "READY", outputAssetId: asset.id, durationMs: rendered.durationMs, updatedAt: this.now() });
       return { status: "COMPLETED" };
