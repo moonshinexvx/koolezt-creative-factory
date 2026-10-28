@@ -63,3 +63,18 @@
 .scene-ai-image div{display:grid;gap:6px;font-size:13px}
 .link-button{justify-self:start;padding:0;border:none;background:none;color:#1d4f86;text-decoration:underline;font-size:12px;cursor:pointer}
 .plan-scenes small.error{color:#8a2c1f}
+.plan-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:12px}
+.plan-tile{display:grid;gap:6px;align-content:start;padding:8px;border:1px solid #d3dae3;border-radius:8px;background:#fff}
+.plan-tile.selected{border-color:#2868ae;background:#f3f8fe}
+.plan-tile.open{border-color:#2868ae;box-shadow:0 0 0 2px #2868ae}
+.plan-tile-open{display:grid;gap:6px;padding:0;border:0;background:none;text-align:left;color:inherit}
+.plan-tile-open b{font-size:13px;line-height:1.3}
+.plan-tile-thumb{aspect-ratio:9/16;border-radius:6px;overflow:hidden;background:#0c1726}
+.plan-tile-thumb img,.plan-tile-thumb video{width:100%!important;height:100%!important;max-height:none!important;margin:0!important;object-fit:cover;display:block;border-radius:0}
+.workspace.winner-workspace{flex-direction:row}
+.workspace.winner-workspace .workspace-panel{flex:1 1 auto;max-width:1180px;min-width:0}
+.plan-panel{flex:1 0 420px;max-width:640px;overflow:auto;border-left:1px solid #d5dce6;background:#f8fafc;padding:22px 20px 48px}
+.plan-panel:empty::before{content:"Click a video plan to open it here.";display:block;color:#536579;text-align:center;margin-top:120px}
+.plan-panel .plan-card{border:none;padding:0;background:transparent}
+.plan-panel-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+@media(max-width:1300px){.workspace.winner-workspace{flex-direction:column;overflow:auto}.workspace.winner-workspace .workspace-panel{max-width:none;overflow:visible}.plan-panel{max-width:none;flex:none;border-left:0;border-top:1px solid #d5dce6;overflow:visible}.plan-panel:empty{display:none}}

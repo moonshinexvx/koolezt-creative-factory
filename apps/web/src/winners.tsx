@@ -400,5 +400,5 @@ export function WinnerAnalysis({ sidebar, products, isOwner }: Props) {
           void run(async () => { await api(`/api/creative-references/${selected.reference.id}`, "DELETE"); setSelectedId(undefined); history.replaceState({}, "", "/winners"); setNotice(`Deleted "${selected.reference.displayName}".`); }, "Could not delete this winner.");
         } } : {})} />
       : <section className="card"><h2>Winner Analysis</h2><p>Upload a winning ad to see why it worked: the hook, angle, beat-by-beat timeline, voiceover, editing, claims check, and a brief for your next creatives.</p><button className="primary" onClick={() => setShowUpload(true)}>+ Add winner</button></section>}
-  </div></section></main>;
+  </div><aside id="plan-panel" className="plan-panel" aria-label="Open video plan" /></section></main>;
 }

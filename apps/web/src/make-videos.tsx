@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "./api.js";
 
 const motionLabel: Record<string, string> = { ZOOM_IN: "slow zoom in", ZOOM_OUT: "slow zoom out", PAN_LEFT: "pan left", PAN_RIGHT: "pan right" };
@@ -88,7 +89,7 @@ function PlanCard({ video, selected, working, onToggle, onEdit, onSceneImages }:
       <dt>Hook (first 3s)</dt><dd><b>{plan.hookText}</b></dd>
       <dt>Call to action</dt><dd>{plan.ctaText}</dd>
     </dl>
-    <details><summary>Voiceover and scenes</summary>
+    <details open><summary>Voiceover and scenes</summary>
       <p className="voiceover">"{plan.voiceover}"</p>
       <ol className="plan-scenes">{plan.scenes.map((scene: any, index: number) => <li key={index}><a href={`/api/assets/${hasAiImage(scene) ? scene.sceneImageAssetId : scene.photoAssetId}`} target="_blank" rel="noreferrer"><img src={`/api/assets/${hasAiImage(scene) ? scene.sceneImageAssetId : scene.photoAssetId}`} alt="" /></a><div><b>{scene.caption || "No caption"}</b><small>{seconds(scene.durationMs)} · {motionLabel[scene.motion] ?? scene.motion}{hasAiImage(scene) ? " · AI image" : ""}</small>
           {scene.imageStatus === "GENERATING" && <small className="muted">Making AI image…</small>}
@@ -102,6 +103,23 @@ function PlanCard({ video, selected, working, onToggle, onEdit, onSceneImages }:
   </article>;
 }
 
+/** Small tile in the plan list: thumbnail, title and status. Clicking it opens the plan in the panel on the right. */
+function PlanTile({ video, open, selected, onOpen, onToggle }: Readonly<{ video: any; open: boolean; selected: boolean; onOpen: () => void; onToggle: () => void }>) {
+  const first = video.plan.scenes[0];
+  const still = first ? (hasAiImage(first) ? first.sceneImageAssetId : first.photoAssetId) : undefined;
+  const selectable = (video.status === "PLANNED" || video.status === "FAILED") && !makingImages(video);
+  return <div className={`plan-tile ${open ? "open" : ""} ${selected ? "selected" : ""}`}>
+    <button type="button" className="plan-tile-open" onClick={onOpen}>
+      <div className="plan-tile-thumb">{video.status === "READY" && video.outputAssetId
+        ? <video src={`/api/assets/${video.outputAssetId}#t=0.5`} preload="metadata" muted playsInline />
+        : still ? <img src={`/api/assets/${still}`} alt="" /> : null}</div>
+      <b>{video.ordinal}. {video.plan.title}</b>
+      <span className={`plan-status ${makingImages(video) ? "rendering" : video.status.toLowerCase()}`}>{makingImages(video) ? "Making AI images…" : statusLabel[video.status] ?? video.status}</span>
+    </button>
+    {selectable && <label className="plan-select"><input type="checkbox" checked={selected} onChange={onToggle} /> Make</label>}
+  </div>;
+}
+
 /** Writes new video plans from an analyzed winner, then makes the chosen ones on the server. */
 export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId: string; reportReady: boolean }>) {
   const [batches, setBatches] = useState<any[]>([]);
@@ -112,6 +130,10 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState("");
+  const [open, setOpen] = useState("");
+  // The winners page has an empty column on the right (#plan-panel); the open plan is shown and edited there.
+  const [panel, setPanel] = useState<HTMLElement | null>(null);
+  useEffect(() => { setPanel(document.getElementById("plan-panel")); }, []);
   const [products, setProducts] = useState<any[]>([]);
   const load = useCallback(async () => setBatches(await api(`/api/video-batches?referenceId=${encodeURIComponent(referenceId)}`)), [referenceId]);
   useEffect(() => { void api("/api/products").then(setProducts).catch(() => undefined); }, []);
@@ -128,6 +150,14 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
     try { await action(); await load(); } catch (reason) { setError(reason instanceof Error ? reason.message : failure); } finally { setWorking(false); }
   };
   const writing = batches.some((entry) => entry.batch.status === "WRITING");
+  const toggle = (id: string) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const openEntry = batches.flatMap((entry) => entry.videos.map((video: any) => ({ video, batch: entry.batch }))).find((entry) => entry.video.id === open);
+  const detail = openEntry && <div className="plan-panel-body">
+    <div className="plan-panel-header"><span className="muted small">Plan {openEntry.video.ordinal} · {openEntry.batch.targetDurationMs / 1000}s</span><button type="button" onClick={() => { setOpen(""); setEditing(""); }}>Close</button></div>
+    {editing === openEntry.video.id
+      ? <PlanEditor key={openEntry.video.id} video={openEntry.video} photos={photosOf(openEntry.batch.productId)} onCancel={() => setEditing("")} onSaved={async () => { setEditing(""); await load(); }} />
+      : <PlanCard key={openEntry.video.id} video={openEntry.video} working={working} selected={selected.includes(openEntry.video.id)} onEdit={() => setEditing(openEntry.video.id)} onSceneImages={(scenes) => void run(() => api(`/api/videos/${openEntry.video.id}/scene-images`, "POST", scenes ? { scenes } : {}), "Could not start the AI scene images.")} onToggle={() => toggle(openEntry.video.id)} />}
+  </div>;
 
   return <section className="card make-videos">
     <h3>Make new videos from this winner</h3>
@@ -148,12 +178,11 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
         {batch.status === "WRITING" && <p className="muted">Claude is writing {batch.requestedCount} plans. This usually takes 1–2 minutes and refreshes automatically.</p>}
         {batch.status === "FAILED" && <p className="error">Writing these plans failed: {batch.failureMessage ?? "unknown error"}. Start a new set to try again.</p>}
         {batch.status === "READY" && <>
-          <div className="plan-grid">{videos.map((video: any) => editing === video.id
-            ? <PlanEditor key={video.id} video={video} photos={photosOf(batch.productId)} onCancel={() => setEditing("")} onSaved={async () => { setEditing(""); await load(); }} />
-            : <PlanCard key={video.id} video={video} working={working} selected={selected.includes(video.id)} onEdit={() => setEditing(video.id)} onSceneImages={(scenes) => void run(() => api(`/api/videos/${video.id}/scene-images`, "POST", scenes ? { scenes } : {}), "Could not start the AI scene images.")} onToggle={() => setSelected((current) => current.includes(video.id) ? current.filter((id) => id !== video.id) : [...current, video.id])} />)}</div>
+          <div className="plan-tiles">{videos.map((video: any) => <PlanTile key={video.id} video={video} open={open === video.id} selected={selected.includes(video.id)} onOpen={() => { setOpen(video.id); setEditing(""); }} onToggle={() => toggle(video.id)} />)}</div>
           <div className="winner-actions"><button className="primary" disabled={working || !chosen.length} onClick={() => void run(async () => { await api(`/api/video-batches/${batch.id}/make`, "POST", { videoIds: chosen.map((video: any) => video.id) }); setSelected((current) => current.filter((id) => !chosen.some((video: any) => video.id === id))); }, "Could not start making videos.")}>Make {chosen.length || ""} selected video{chosen.length === 1 ? "" : "s"}</button><span className="muted small">Each video takes about 20–40 seconds to make, one after another.</span></div>
         </>}
       </div>;
     })}
+    {detail && (panel ? createPortal(detail, panel) : detail)}
   </section>;
 }
