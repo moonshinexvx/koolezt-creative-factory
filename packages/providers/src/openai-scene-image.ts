@@ -35,8 +35,8 @@ export class OpenAISceneImageProvider implements SceneImageProvider {
         output_format: "jpeg",
         output_compression: 92,
         n: 1,
-        // Not supported by the mini model; elsewhere it makes the result follow the product photo closely.
-        ...(this.model.includes("mini") ? {} : { input_fidelity: "high" as const })
+        // Only gpt-image-1 and gpt-image-1.5 accept input fidelity (gpt-image-2 and the mini model reject it with a 400).
+        ...(/^gpt-image-1(\.5)?(-\d{4}-\d{2}-\d{2})?$/.test(this.model) ? { input_fidelity: "high" as const } : {})
       });
     } catch (error) {
       const status = (error as { status?: number }).status;
