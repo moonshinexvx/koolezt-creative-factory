@@ -17,7 +17,7 @@ export interface VideoRenderer {
 
 export type JobOutcome = Readonly<{ status: "COMPLETED" | "FAILED" | "PENDING"; lastError?: string; nextAttemptAt?: string }>;
 
-const MAX_PHOTOS = 8;
+const MAX_PHOTOS = 12;
 const MAX_RENDER_ATTEMPTS = 4;
 const SCENE_IMAGE_CONCURRENCY = 4;
 /** The scene without its AI image state (status, error, and the image itself). */
@@ -312,16 +312,23 @@ export class WinnerVideoService {
     const video = await this.d.videos.getVideo(job.targetId);
     if (!generating(video)) return { status: "COMPLETED" };
     const batch = await this.d.videos.getBatch(video.batchId);
-    const { photos } = await this.productPhotos(batch.productId, 1);
-    const main = photos[0];
-    const reference = main && this.d.sceneImages ? { bytes: await this.d.storage.read(main.storageKey), mimeType: main.mimeType } : undefined;
+    // Each scene is made from the product photo (mockup) its script chose, so different scenes show different mockups.
+    const { photos } = await this.productPhotos(batch.productId, Number.POSITIVE_INFINITY);
+    const references = new Map<string, Promise<Readonly<{ bytes: Uint8Array; mimeType: string }>>>();
+    const referenceFor = (photoAssetId: string) => {
+      const photo = photos.find((item) => item.id === photoAssetId) ?? photos[0];
+      if (!photo) return undefined;
+      if (!references.has(photo.id)) references.set(photo.id, this.d.storage.read(photo.storageKey).then((bytes) => ({ bytes, mimeType: photo.mimeType })));
+      return references.get(photo.id)!;
+    };
     const scenes = [...video.plan.scenes];
     const make = async (index: number) => {
       const scene = plainScene(scenes[index]!);
       try {
         if (!this.d.sceneImages) throw new DomainError("SCENE_IMAGES_UNAVAILABLE", "AI scene images need OPENAI_API_KEY on the server.");
-        if (!reference) throw new DomainError("PRODUCT_PHOTOS_REQUIRED", "Add a main product photo first.");
-        const image = await this.d.sceneImages.generate({ prompt: sceneImagePrompt(scene.imagePrompt ?? ""), referenceImages: [reference] });
+        const reference = referenceFor(scene.photoAssetId);
+        if (!reference) throw new DomainError("PRODUCT_PHOTOS_REQUIRED", "Add a product photo first.");
+        const image = await this.d.sceneImages.generate({ prompt: sceneImagePrompt(scene.imagePrompt ?? ""), referenceImages: [await reference] });
         const asset = await this.d.storage.put(`scene-images/${video.id}/${index + 1}-${randomUUID()}.${image.extension}`, { bytes: image.bytes, mimeType: image.mimeType, extension: image.extension, metadata: { projectId: batch.productId, purpose: "SCENE_IMAGE", model: image.model, originalFilename: `scene-${index + 1}.${image.extension}` } });
         scenes[index] = { ...scene, sceneImageAssetId: asset.id, imageStatus: "READY" };
       } catch (error) {

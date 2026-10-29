@@ -126,7 +126,7 @@ function PlanCard({ video, selected, working, onToggle, onEdit, onSceneImages }:
         <CopyPrompt label="AI image: this scene" text={scene.imagePrompt} rules={IMAGE_RULES} /><CopyPrompt label="Kling / Seedance video: this scene" text={scene.videoPrompt} rules={VIDEO_RULES} /></li>)}</ol>
     </details>
     {canMakeImages && <button type="button" disabled={working} onClick={() => onSceneImages()}>{aiCount ? `Make all ${plan.scenes.length} AI scene images again` : `Make AI scene images (${plan.scenes.length})`}</button>}
-    {busyImages && <p className="muted small">OpenAI is making one image per scene from the main product photo. This takes about 1–2 minutes and refreshes automatically.</p>}
+    {busyImages && <p className="muted small">OpenAI is making one image per scene from the product photo chosen for that scene. This takes about 1–2 minutes and refreshes automatically.</p>}
     {editable && <button type="button" onClick={onEdit}>{video.status === "READY" ? "Edit and make again" : "Edit photos and scenes"}</button>}
   </article>;
 }

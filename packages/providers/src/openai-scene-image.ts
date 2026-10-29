@@ -53,9 +53,11 @@ export class OpenAISceneImageProvider implements SceneImageProvider {
 export class FakeSceneImageProvider implements SceneImageProvider {
   readonly model = "fake-scene-image";
   readonly prompts: string[] = [];
+  readonly references: Uint8Array[][] = [];
   constructor(private readonly image: Readonly<{ bytes: Uint8Array; mimeType: string; extension: string }>) {}
   async generate(input: Parameters<SceneImageProvider["generate"]>[0]) {
     this.prompts.push(input.prompt);
+    this.references.push(input.referenceImages.map((image) => image.bytes));
     return { ...this.image, model: this.model };
   }
 }

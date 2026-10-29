@@ -273,4 +273,24 @@ describe("winner to videos", () => {
       expect(await setup.service.discardBrief(second.id)).toMatchObject({ status: "FAILED", failureMessage: "Discarded by the owner." });
     } finally { await setup.dispose(); }
   });
+
+  it("makes each AI scene image from the product photo that scene uses, not only the main photo", async () => {
+    const setup = await harness();
+    try {
+      const second = await setup.storage.put(`products/${setup.product.id}/second.png`, { bytes: new Uint8Array([9, 9, 9]), mimeType: "image/png", extension: "png", metadata: {} });
+      const product = await setup.repository.getProduct(setup.product.id);
+      await setup.repository.saveProduct({ ...product, assets: [...product.assets, { id: second.id, kind: "IMAGE", label: "Mockup 2", storageKey: second.storageKey, mimeType: "image/png" }] });
+      await setup.dnaService.requestAnalysis(setup.reference.id, crypto.randomUUID());
+      await setup.drain();
+      const batch = await setup.service.requestPlans({ referenceId: setup.reference.id, count: 3, durationSeconds: 15, actor: "owner" });
+      await setup.drain();
+      const [video] = await setup.videos.listVideos(batch.id);
+      // The fake scripts use photos 1, 2, 1 for their three scenes.
+      expect(video!.plan.scenes.map((scene) => scene.photoAssetId)).toEqual([setup.photo.id, second.id, setup.photo.id]);
+      await setup.service.requestSceneImages(video!.id);
+      await setup.drain();
+      expect(setup.sceneImages.references.map(([bytes]) => Array.from(bytes!).slice(0, 3))).toContainEqual([9, 9, 9]);
+      expect(new Set(setup.sceneImages.references.map(([bytes]) => bytes!.length)).size).toBe(2);
+    } finally { await setup.dispose(); }
+  });
 });
