@@ -100,3 +100,6 @@
 .review-check.strong,.review-check.verified{color:#1f5f3a;border-color:#9fcdb0}
 .review-check.weak{color:#8a2c1f;border-color:#e3b4ad;background:#fff6f4}
 .review-check.fixed{color:#7a4510;border-color:#e6c49a}
+.scene-clip{display:flex;gap:10px;align-items:flex-start}
+.scene-clip video{width:96px!important;max-height:170px!important;aspect-ratio:9/16;object-fit:cover;border-radius:4px;background:#0c1726;margin:0!important}
+.scene-clip>div{display:grid;gap:6px;font-size:13px;flex:1}

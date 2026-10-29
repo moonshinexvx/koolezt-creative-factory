@@ -311,4 +311,36 @@ describe("winner to videos", () => {
       expect(new Set(setup.sceneImages.references.map(([bytes]) => bytes!.length)).size).toBe(2);
     } finally { await setup.dispose(); }
   });
+
+  it("uses an uploaded Kling clip for a scene, cut to the scene length from the chosen second", async () => {
+    const setup = await harness({ renderer: new PlanVideoRenderer({ ffmpegPath: ffmpeg, ffprobePath: ffprobe, lowPriority: false }) });
+    try {
+      await setup.dnaService.requestAnalysis(setup.reference.id, crypto.randomUUID());
+      await setup.drain();
+      const batch = await setup.service.requestPlans({ referenceId: setup.reference.id, count: 3, durationSeconds: 15, actor: "owner" });
+      await setup.drain();
+      const [video] = await setup.videos.listVideos(batch.id);
+      execFileSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=720x1280:d=5:r=24", "-pix_fmt", "yuv420p", "-y", join(setup.root, "kling.mp4")]);
+      const clip = await setup.service.uploadSceneClip(video!.id, { bytes: new Uint8Array(await readFile(join(setup.root, "kling.mp4"))), mimeType: "video/mp4", extension: "mp4", filename: "kling.mp4" });
+      expect(clip.durationMs).toBeGreaterThanOrEqual(4_900);
+      await expect(setup.service.uploadSceneClip(video!.id, { bytes: new Uint8Array([1, 2, 3]), mimeType: "video/mp4", extension: "mp4", filename: "bad.mp4" })).rejects.toMatchObject({ code: "SCENE_CLIP_INVALID" });
+      const current = await setup.videos.getVideo(video!.id);
+      const scenes = current.plan.scenes.map((scene, index) => index === 1 ? { ...scene, sceneVideoAssetId: clip.assetId, videoStartMs: 1_000, videoDurationMs: clip.durationMs } : index === 2 ? { ...scene, sceneVideoAssetId: crypto.randomUUID() } : scene);
+      const edited = await setup.service.editPlan(video!.id, { ...current.plan, scenes });
+      expect(edited.plan.scenes[1]).toMatchObject({ sceneVideoAssetId: clip.assetId, videoStartMs: 1_000 });
+      // A clip that was never uploaded for this plan is ignored.
+      expect(edited.plan.scenes[2]!.sceneVideoAssetId).toBeUndefined();
+      expect(edited.plan.uploadedClipIds).toEqual([clip.assetId]);
+      await setup.service.makeVideos(batch.id, [video!.id]);
+      await setup.drain();
+      const made = await setup.videos.getVideo(video!.id);
+      expect(made.status).toBe("READY");
+      const out = join(setup.root, "with-clip.mp4");
+      await (await import("node:fs/promises")).writeFile(out, await setup.storage.read((await setup.storage.getAsset(made.outputAssetId!)).storageKey));
+      const probe = JSON.parse(execFileSync(ffprobe, ["-v", "error", "-show_entries", "stream=codec_type,duration", "-of", "json", out]).toString()) as { streams: { codec_type: string; duration: string }[] };
+      const picture = Number(probe.streams.find((stream) => stream.codec_type === "video")!.duration);
+      const sound = Number(probe.streams.find((stream) => stream.codec_type === "audio")!.duration);
+      expect(Math.abs(picture - sound)).toBeLessThan(0.2);
+    } finally { await setup.dispose(); }
+  }, 120_000);
 });

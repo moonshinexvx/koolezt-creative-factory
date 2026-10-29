@@ -76,7 +76,7 @@ function isNotFound(error: unknown): boolean {
 }
 
 /** Media owned by a Product rather than a project; the product id is used only in the storage path. */
-export const PRODUCT_SCOPED_PURPOSES: ReadonlySet<string> = new Set(["PRODUCT_ASSET", "WINNER_SOURCE_VIDEO", "WINNER_VIDEO", "SCENE_IMAGE"]);
+export const PRODUCT_SCOPED_PURPOSES: ReadonlySet<string> = new Set(["PRODUCT_ASSET", "WINNER_SOURCE_VIDEO", "WINNER_VIDEO", "SCENE_IMAGE", "SCENE_VIDEO"]);
 
 export class S3DurableMediaStore implements DurableMediaStore {
   readonly providerKey = "s3";

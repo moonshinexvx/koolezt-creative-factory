@@ -9,7 +9,7 @@ import type { CreativeBrief, CreativeDnaRepository, CreativeProvider, FactoryRep
 export interface VideoRenderer {
   probe(path: string): Promise<Readonly<{ width?: number; height?: number; durationMs?: number }>>;
   render(input: Readonly<{
-    scenes: readonly Readonly<{ photoPath: string; photoWidth: number; photoHeight: number; motion: VideoPlanMotion; caption: string; durationMs: number; fullFrame?: boolean; transition?: VideoTransition }>[];
+    scenes: readonly Readonly<{ photoPath: string; photoWidth: number; photoHeight: number; motion: VideoPlanMotion; caption: string; durationMs: number; fullFrame?: boolean; transition?: VideoTransition; clip?: Readonly<{ startMs: number }> }>[];
     hookText: string; ctaText: string; voicePath: string; voiceDurationMs: number; targetDurationMs: number; style?: VideoPlanStyle;
     captionStyle?: VideoCaptionStyle; musicPath?: string;
   }>): Promise<Readonly<{ bytes: Uint8Array; durationMs: number }>>;
@@ -104,7 +104,13 @@ export function normalizeEditedPlan(value: unknown): VideoPlan {
     const durationMs = Number(scene.durationMs);
     if (typeof scene.photoAssetId !== "string" || !motion || !Number.isInteger(durationMs) || durationMs < 1000 || durationMs > 15_000) throw new DomainError("VIDEO_PLAN_INVALID", "Each scene needs a photo, a motion and a length between 1 and 15 seconds.");
     const sceneImageAssetId = typeof scene.sceneImageAssetId === "string" ? scene.sceneImageAssetId : undefined;
-    return { photoAssetId: scene.photoAssetId, motion, caption: text(scene.caption, 80), durationMs, ...sceneExtras(scene), ...(sceneImageAssetId ? { sceneImageAssetId } : {}) };
+    const sceneVideoAssetId = typeof scene.sceneVideoAssetId === "string" ? scene.sceneVideoAssetId : undefined;
+    const videoDurationMs = Number(scene.videoDurationMs);
+    const videoStartMs = Math.max(0, Math.min(Number.isFinite(videoDurationMs) ? videoDurationMs : 600_000, Math.round(Number(scene.videoStartMs) || 0)));
+    return {
+      photoAssetId: scene.photoAssetId, motion, caption: text(scene.caption, 80), durationMs, ...sceneExtras(scene), ...(sceneImageAssetId ? { sceneImageAssetId } : {}),
+      ...(sceneVideoAssetId ? { sceneVideoAssetId, videoStartMs, ...(Number.isFinite(videoDurationMs) && videoDurationMs > 0 ? { videoDurationMs: Math.round(videoDurationMs) } : {}) } : {})
+    };
   });
   const title = text(raw.title, 120);
   const voiceover = text(raw.voiceover, 900);
@@ -290,10 +296,38 @@ export class WinnerVideoService {
     void _f;
     // Only images this plan already made may be kept; anything else falls back to the product photo.
     const known = new Set(video.plan.scenes.flatMap((scene) => scene.sceneImageAssetId ? [scene.sceneImageAssetId] : []));
-    const scenes = plan.scenes.map((scene) => scene.sceneImageAssetId && known.has(scene.sceneImageAssetId) ? { ...plainScene(scene), sceneImageAssetId: scene.sceneImageAssetId, imageStatus: "READY" as const } : plainScene(scene));
-    const edited: WinnerVideo = { ...rest, plan: { ...plan, scenes }, status: "PLANNED", updatedAt: this.now() };
+    const clips = new Set([...(video.plan.uploadedClipIds ?? []), ...video.plan.scenes.flatMap((scene) => scene.sceneVideoAssetId ? [scene.sceneVideoAssetId] : [])]);
+    const scenes = plan.scenes.map((edited) => {
+      const { sceneVideoAssetId, videoStartMs: _start, videoDurationMs: _length, ...rest } = edited;
+      void _start; void _length;
+      const scene = sceneVideoAssetId && clips.has(sceneVideoAssetId) ? edited : rest;
+      return scene.sceneImageAssetId && known.has(scene.sceneImageAssetId) ? { ...plainScene(scene), sceneImageAssetId: scene.sceneImageAssetId, imageStatus: "READY" as const } : plainScene(scene);
+    });
+    const edited: WinnerVideo = { ...rest, plan: { ...plan, scenes, ...(video.plan.uploadedClipIds ? { uploadedClipIds: video.plan.uploadedClipIds } : {}) }, status: "PLANNED", updatedAt: this.now() };
     await this.d.videos.updateVideo(edited);
     return edited;
+  }
+
+  /** Stores a clip the owner made elsewhere (for example in the Kling app) so a scene can use it; the editor then picks the scene and start time. */
+  async uploadSceneClip(videoId: string, file: Readonly<{ bytes: Uint8Array; mimeType: string; extension: string; filename: string }>): Promise<Readonly<{ assetId: string; durationMs: number }>> {
+    const video = await this.d.videos.getVideo(videoId);
+    if (video.status === "QUEUED" || video.status === "RENDERING") throw new DomainError("VIDEO_BUSY", "This video is being made. Upload clips after it finishes.");
+    const batch = await this.d.videos.getBatch(video.batchId);
+    const root = await mkdtemp(join(tmpdir(), "koolezt-clip-"));
+    let durationMs = 0;
+    try {
+      const path = join(root, `clip.${file.extension}`);
+      await writeFile(path, file.bytes);
+      const probed = await this.d.renderer.probe(path).catch(() => ({} as Readonly<{ width?: number; durationMs?: number }>));
+      if (!probed.width || !probed.durationMs || probed.durationMs < 500) throw new DomainError("SCENE_CLIP_INVALID", "This file is not a playable video of at least half a second.");
+      durationMs = probed.durationMs;
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+    const asset = await this.d.storage.put(`scene-videos/${video.id}/${randomUUID()}.${file.extension}`, { bytes: file.bytes, mimeType: file.mimeType, extension: file.extension, metadata: { projectId: batch.productId, purpose: "SCENE_VIDEO", originalFilename: file.filename.slice(0, 255) } });
+    const latest = await this.d.videos.getVideo(videoId);
+    await this.d.videos.updateVideo({ ...latest, plan: { ...latest.plan, uploadedClipIds: [...(latest.plan.uploadedClipIds ?? []), asset.id] }, updatedAt: this.now() });
+    return { assetId: asset.id, durationMs };
   }
 
   /** Starts making AI scene images (OpenAI, from each scene's image prompt and the main product photo). One paid image per scene; never retried automatically. */
@@ -385,7 +419,14 @@ export class WinnerVideoService {
       const voiceDurationMs = (await this.d.renderer.probe(voiceFile)).durationMs ?? 0;
       const scenes = [];
       for (const [index, scene] of video.plan.scenes.entries()) {
-        // A finished AI scene image is used full frame; otherwise the product photo sits on its blurred copy.
+        // An uploaded clip wins, then a finished AI scene image (both full frame); otherwise the product photo sits on its blurred copy.
+        if (scene.sceneVideoAssetId) {
+          const clip = await this.d.storage.getAsset(scene.sceneVideoAssetId);
+          const clipPath = join(root, `clip-${index}.${clip.mimeType.includes("webm") ? "webm" : clip.mimeType.includes("quicktime") ? "mov" : "mp4"}`);
+          await writeFile(clipPath, await this.d.storage.read(clip.storageKey));
+          scenes.push({ photoPath: clipPath, photoWidth: 1080, photoHeight: 1920, motion: scene.motion, caption: scene.caption, durationMs: scene.durationMs, fullFrame: true, clip: { startMs: scene.videoStartMs ?? 0 }, ...(scene.transition ? { transition: scene.transition } : {}) });
+          continue;
+        }
         const sceneImage = scene.sceneImageAssetId && scene.imageStatus === "READY" ? await this.d.storage.getAsset(scene.sceneImageAssetId) : undefined;
         const asset = sceneImage ?? product.assets.find((item) => item.id === scene.photoAssetId);
         if (!asset) throw new DomainError("VIDEO_PHOTO_MISSING", "A product photo used by this plan was removed. Choose another photo with Edit.");

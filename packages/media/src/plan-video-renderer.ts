@@ -25,7 +25,8 @@ const CTA_MS = 2_500;
 const MOTION_ZOOM = 0.12;
 
 /** fullFrame: the image is a finished scene (AI scene image) and fills the whole frame instead of sitting on a blurred background. */
-export type PlanRenderScene = Readonly<{ photoPath: string; photoWidth: number; photoHeight: number; motion: VideoPlanMotion; caption: string; durationMs: number; fullFrame?: boolean; transition?: VideoTransition }>;
+/** clip: photoPath is a video; the scene plays it from startMs (frozen on its last frame if it runs out). */
+export type PlanRenderScene = Readonly<{ photoPath: string; photoWidth: number; photoHeight: number; motion: VideoPlanMotion; caption: string; durationMs: number; fullFrame?: boolean; transition?: VideoTransition; clip?: Readonly<{ startMs: number }> }>;
 export type PlanRenderInput = Readonly<{ scenes: readonly PlanRenderScene[]; hookText: string; ctaText: string; voicePath: string; voiceDurationMs: number; targetDurationMs: number; style?: VideoPlanStyle;
   captionStyle?: VideoCaptionStyle; musicPath?: string }>;
 
@@ -97,13 +98,20 @@ export function buildPlanVideoArguments(input: Readonly<{
   const sceneFrames = input.sceneMs.map(toFrames);
   const clipFrames = (index: number) => sceneFrames[index]! + (index < last ? into(index + 1).frames + SPARE_FRAMES : 0);
   input.scenes.forEach((scene, index) => {
-    args.push("-loop", "1", "-framerate", String(PLAN_VIDEO_FPS), "-t", seconds(clipFrames(index)), "-i", scene.photoPath);
+    if (scene.clip) args.push("-ss", (scene.clip.startMs / 1000).toFixed(3), "-t", seconds(clipFrames(index) + SPARE_FRAMES), "-i", scene.photoPath);
+    else args.push("-loop", "1", "-framerate", String(PLAN_VIDEO_FPS), "-t", seconds(clipFrames(index)), "-i", scene.photoPath);
   });
   args.push("-i", input.voicePath);
   if (input.musicPath) args.push("-stream_loop", "-1", "-i", input.musicPath);
   const filters: string[] = [];
   input.scenes.forEach((scene, index) => {
     const frames = clipFrames(index);
+    if (scene.clip) {
+      // A finished clip fills the frame as it is: no zoom or pan, its own sound is not used.
+      const handmadeClip = stop ? `,eq=brightness='0.025*sin(floor(n/${STOP_MOTION_STEP})*3.7)':eval=frame,noise=alls=7:allf=t` : "";
+      filters.push(`[${index}:v]scale=${PLAN_VIDEO_WIDTH}:${PLAN_VIDEO_HEIGHT}:force_original_aspect_ratio=increase,crop=${PLAN_VIDEO_WIDTH}:${PLAN_VIDEO_HEIGHT},setsar=1,fps=${PLAN_VIDEO_FPS},tpad=stop_mode=clone:stop_duration=${seconds(frames)},trim=duration=${seconds(frames)},setpts=PTS-STARTPTS${handmadeClip},format=yuv420p[s${index}]`);
+      return;
+    }
     const full = scene.fullFrame === true;
     const box = full ? { width: PLAN_VIDEO_WIDTH, height: PLAN_VIDEO_HEIGHT } : foregroundBox(scene.photoWidth, scene.photoHeight);
     // Full-frame scenes are cropped to 9:16 and upscaled 1.5x (not 2x) to keep the zoom smooth without a 4K intermediate.

@@ -34,7 +34,21 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
   const [draft, setDraft] = useState<any>(() => structuredClone(video.plan));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [uploading, setUploading] = useState(-1);
   const set = (field: string, value: unknown) => setDraft((current: any) => ({ ...current, [field]: value }));
+  const patchScene = (index: number, patch: Record<string, unknown>) => setDraft((current: any) => ({ ...current, scenes: current.scenes.map((scene: any, at: number) => at === index ? { ...scene, ...patch } : scene) }));
+  // The clip is stored right away; it is attached to the scene when the plan is saved.
+  const uploadClip = async (index: number, file: File) => {
+    setUploading(index); setError("");
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const response = await fetch(`/api/videos/${video.id}/scene-clips`, { method: "POST", headers: { "x-koolezt-actor": "web-user" }, body: form });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.message ?? "Upload failed.");
+      patchScene(index, { sceneVideoAssetId: json.assetId, videoDurationMs: json.durationMs, videoStartMs: 0 });
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Upload failed."); } finally { setUploading(-1); }
+  };
   const setScene = (index: number, field: string, value: unknown) => set("scenes", draft.scenes.map((scene: any, at: number) => at === index ? { ...scene, [field]: value } : scene));
   const move = (index: number, step: number) => {
     const scenes = [...draft.scenes];
@@ -63,6 +77,16 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
       {scene.sceneImageAssetId
         ? <div className="scene-ai-image"><img src={`/api/assets/${scene.sceneImageAssetId}`} alt="AI scene" /><div><b>AI scene image</b><button type="button" onClick={() => setDraft((current: any) => ({ ...current, scenes: current.scenes.map((item: any, at: number) => at === index ? { ...item, sceneImageAssetId: undefined, imageStatus: undefined, imageError: undefined } : item) }))}>Use product photo instead</button></div></div>
         : <div className="scene-photos">{photos.map((photo: any) => <button type="button" key={photo.id} className={photo.id === scene.photoAssetId ? "chosen" : ""} title={photo.label} onClick={() => setScene(index, "photoAssetId", photo.id)}><img src={`/api/assets/${photo.id}`} alt={photo.label} /></button>)}</div>}
+      <div className="scene-clip">{scene.sceneVideoAssetId
+        ? <><video src={`/api/assets/${scene.sceneVideoAssetId}#t=${(scene.videoStartMs ?? 0) / 1000}`} muted playsInline controls preload="metadata" />
+          <div>
+            <b>Scene video</b>
+            <label>Start at (seconds)<input type="number" min={0} step={0.1} max={Math.max(0, ((scene.videoDurationMs ?? 5000) - scene.durationMs) / 1000)} value={(scene.videoStartMs ?? 0) / 1000} onChange={(event) => setScene(index, "videoStartMs", Math.round(Math.max(0, Number(event.target.value) || 0) * 1000))} /></label>
+            <small className="muted">Uses {seconds(scene.durationMs)} of this {seconds(scene.videoDurationMs ?? 0)} clip, from {seconds(scene.videoStartMs ?? 0)}.{(scene.videoStartMs ?? 0) + scene.durationMs > (scene.videoDurationMs ?? Infinity) ? " The clip ends early; its last frame is held." : ""}</small>
+            <button type="button" onClick={() => patchScene(index, { sceneVideoAssetId: undefined, videoStartMs: undefined, videoDurationMs: undefined })}>Remove video</button>
+          </div></>
+        : <label className="upload-label">{uploading === index ? "Uploading…" : "Scene video from Kling (MP4, replaces the image)"}<input type="file" accept="video/mp4,video/quicktime,video/webm" disabled={uploading >= 0} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void uploadClip(index, file); }} /></label>}
+      </div>
       <label>Caption<input value={scene.caption} maxLength={80} onChange={(event) => setScene(index, "caption", event.target.value)} /></label>
       <div className="scene-row">
         <label>Seconds<input type="number" min={1} max={15} step={0.5} value={scene.durationMs / 1000} onChange={(event) => setScene(index, "durationMs", Math.round(Math.min(15, Math.max(1, Number(event.target.value) || 1)) * 1000))} /></label>
@@ -82,7 +106,7 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
       </div>
     </li>)}</ol>
     <button type="button" disabled={draft.scenes.length >= 8} onClick={() => set("scenes", [...draft.scenes, { ...draft.scenes.at(-1), caption: "" }])}>+ Add scene</button>
-    <p className="muted small">Seconds set how long each scene lasts compared with the others; the video is stretched to fit the voiceover.</p>
+    <p className="muted small">Scene videos are uploaded right away and used once you click Save plan. Seconds set how long each scene lasts compared with the others; the video is stretched to fit the voiceover.</p>
     {error && <p className="error small" role="alert">{error}</p>}
     <div className="scene-row"><button className="primary" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Save plan"}</button><button type="button" disabled={saving} onClick={onCancel}>Cancel</button></div>
   </article>;
@@ -125,7 +149,7 @@ function PlanCard({ video, selected, working, onToggle, onEdit, onSceneImages }:
     </dl>
     <details open><summary>Voiceover and scenes</summary>
       <p className="voiceover">"{plan.voiceover}"</p>
-      <ol className="plan-scenes">{plan.scenes.map((scene: any, index: number) => <li key={index}><a href={`/api/assets/${hasAiImage(scene) ? scene.sceneImageAssetId : scene.photoAssetId}`} target="_blank" rel="noreferrer"><img src={`/api/assets/${hasAiImage(scene) ? scene.sceneImageAssetId : scene.photoAssetId}`} alt="" /></a><div><b>{scene.caption || "No caption"}</b><small>{seconds(scene.durationMs)}{scene.shotType ? ` · ${scene.shotType}` : ""} · {motionLabel[scene.motion] ?? scene.motion}{index > 0 && scene.transition ? ` · ${transitionLabel[scene.transition]}` : ""}{hasAiImage(scene) ? " · AI image" : ""}</small>
+      <ol className="plan-scenes">{plan.scenes.map((scene: any, index: number) => <li key={index}><a href={`/api/assets/${hasAiImage(scene) ? scene.sceneImageAssetId : scene.photoAssetId}`} target="_blank" rel="noreferrer"><img src={`/api/assets/${hasAiImage(scene) ? scene.sceneImageAssetId : scene.photoAssetId}`} alt="" /></a><div><b>{scene.caption || "No caption"}</b><small>{seconds(scene.durationMs)}{scene.shotType ? ` · ${scene.shotType}` : ""} · {motionLabel[scene.motion] ?? scene.motion}{index > 0 && scene.transition ? ` · ${transitionLabel[scene.transition]}` : ""}{scene.sceneVideoAssetId ? " · Kling video" : hasAiImage(scene) ? " · AI image" : ""}</small>
           {scene.voiceLine && <small className="voice-line">"{scene.voiceLine}"</small>}
           {scene.imageStatus === "GENERATING" && <small className="muted">Making AI image…</small>}
           {scene.imageStatus === "FAILED" && <small className="error">AI image failed: {scene.imageError}</small>}

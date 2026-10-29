@@ -130,6 +130,18 @@ export function buildServer(runtime: Runtime = createRuntime()) {
   app.put("/api/videos/:id/plan",async(request)=>runtime.winnerVideos.editPlan((request.params as{id:string}).id,body(z.object({scenes:z.array(z.unknown()).max(8)}).passthrough(),request.body)));
   app.post("/api/video-batches/:id/approve-brief",async(request,reply)=>reply.code(202).send(await runtime.winnerVideos.approveBrief((request.params as{id:string}).id,body(z.object({angleIds:z.array(z.string().max(20)).min(1).max(8)}),request.body).angleIds)));
   app.post("/api/video-batches/:id/discard-brief",async(request)=>runtime.winnerVideos.discardBrief((request.params as{id:string}).id));
+  app.post("/api/videos/:id/scene-clips",async(request)=>{
+    const part=await request.file();
+    if(!part)throw new DomainError("UPLOAD_REQUIRED","Choose a video file.");
+    const mimeType=part.mimetype.toLowerCase();
+    const extension=mimeType==="video/mp4"?"mp4":mimeType==="video/quicktime"?"mov":mimeType==="video/webm"?"webm":undefined;
+    if(!extension)throw new DomainError("UNSUPPORTED_MEDIA_TYPE","Scene videos must be MP4, MOV or WebM.");
+    const bytes=await part.toBuffer();
+    if(part.file.truncated||bytes.byteLength===0)throw new DomainError("INVALID_UPLOAD","Upload is empty or exceeds the configured size limit.");
+    const signature=extension==="webm"?bytes.subarray(0,4).equals(Buffer.from([26,69,223,163])):bytes.subarray(4,8).equals(Buffer.from("ftyp"));
+    if(!signature)throw new DomainError("INVALID_MEDIA_SIGNATURE","File content does not match its declared media type.");
+    return runtime.winnerVideos.uploadSceneClip((request.params as{id:string}).id,{bytes:new Uint8Array(bytes),mimeType,extension,filename:part.filename});
+  });
   app.post("/api/videos/:id/scene-images",async(request,reply)=>{const input=body(z.object({scenes:z.array(z.number().int().min(0).max(7)).max(8).optional()}),request.body??{});return reply.code(202).send(await runtime.winnerVideos.requestSceneImages((request.params as{id:string}).id,input.scenes));});
   app.get("/api/videos/:id/download",async(request,reply)=>{const video=await runtime.winnerVideoStore.getVideo((request.params as{id:string}).id);if(video.status!=="READY"||!video.outputAssetId)throw new DomainError("VIDEO_NOT_READY","This video is not ready yet.");const asset=await runtime.storage.getAsset(video.outputAssetId);const filename=`${video.plan.title.replace(/[^A-Za-z0-9._ -]/g,"").trim().replace(/\s+/g,"-").slice(0,80)||"video"}.mp4`;if(asset.storageProvider==="s3"&&runtime.durableMediaStore){const reference=await runtime.durableMediaStore.getDownloadReference(asset.id,{downloadFilename:filename});return reply.redirect(reference.url);}return reply.header("Content-Type","video/mp4").header("Content-Disposition",`attachment; filename="${filename}"`).send(Buffer.from(await runtime.storage.read(asset.storageKey)));});
 

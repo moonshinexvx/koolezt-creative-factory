@@ -379,6 +379,8 @@ export type VideoPlanScene = Readonly<{
   photoAssetId: string; motion: VideoPlanMotion; caption: string; durationMs: number; imagePrompt?: string; videoPrompt?: string;
   shotType?: string; voiceLine?: string; transition?: VideoTransition;
   sceneImageAssetId?: string; imageStatus?: SceneImageStatus; imageError?: string;
+  /** A clip the owner made elsewhere (for example in the Kling app). It replaces the image; the scene uses durationMs of it from videoStartMs. */
+  sceneVideoAssetId?: string; videoStartMs?: number; videoDurationMs?: number;
 }>;
 /** The marketing director's brief for one winner: who buys, why, and the angles and hooks worth testing. */
 export type CreativeBrief = Readonly<{
@@ -402,6 +404,8 @@ export type VideoPlan = Readonly<{
   format?: VideoFormat; angle?: string; hookType?: HookType; captionStyle?: VideoCaptionStyle; musicMood?: MusicMood; voice?: string; voiceStyle?: string;
   /** The critic's checklist after reviewing (and possibly rewriting) the script. No score: a self-graded number was not meaningful. */
   review?: VideoPlanReview;
+  /** Clips uploaded for this plan; only these may be set as a scene video. Maintained by the server. */
+  uploadedClipIds?: readonly string[];
 }>;
 export const REVIEW_CHECKS = ["hook", "story", "shots", "callToAction", "claims"] as const;
 export type ReviewCheck = (typeof REVIEW_CHECKS)[number];
