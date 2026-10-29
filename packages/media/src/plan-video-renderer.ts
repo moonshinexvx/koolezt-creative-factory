@@ -17,6 +17,7 @@ const TRANSITIONS: Readonly<Record<VideoTransition, Readonly<{ name: string; ms:
   CUT: { name: "fade", ms: CUT_MS }, FADE: { name: "fade", ms: TRANSITION_MS }, WHIP: { name: "slideleft", ms: 250 }, ZOOM: { name: "zoomin", ms: 300 }
 };
 const MUSIC_VOLUME = 0.12;
+const SPARE_FRAMES = 3;
 const STOP_MOTION_STEP = 4;
 const VOICE_LEAD_IN_MS = 300;
 const VOICE_TAIL_MS = 700;
@@ -87,18 +88,22 @@ export function buildPlanVideoArguments(input: Readonly<{
   const last = input.scenes.length - 1;
   const stop = input.style === "STOP_MOTION";
   // How scene i starts; stop motion always uses hard cuts. Each clip runs on by the length of the next transition.
-  const into = (index: number) => TRANSITIONS[stop ? "CUT" : input.scenes[index]?.transition ?? "FADE"];
-  const clipLength = (index: number) => input.sceneMs[index]! + (index < last ? into(index + 1).ms : 0);
+  // Everything is counted in whole frames: with fractional scene lengths FFmpeg 6.1's xfade can run out of
+  // frames and end the picture early while the voice continues. Each clip also runs a few spare frames past
+  // its outgoing transition (xfade drops them), so the transition always has frames to work with.
+  const toFrames = (ms: number) => Math.max(1, Math.round((ms / 1000) * PLAN_VIDEO_FPS));
+  const seconds = (frames: number) => (frames / PLAN_VIDEO_FPS).toFixed(4);
+  const into = (index: number) => { const transition = TRANSITIONS[stop ? "CUT" : input.scenes[index]?.transition ?? "FADE"]; return { name: transition.name, frames: toFrames(transition.ms) }; };
+  const sceneFrames = input.sceneMs.map(toFrames);
+  const clipFrames = (index: number) => sceneFrames[index]! + (index < last ? into(index + 1).frames + SPARE_FRAMES : 0);
   input.scenes.forEach((scene, index) => {
-    const clipMs = clipLength(index);
-    args.push("-loop", "1", "-framerate", String(PLAN_VIDEO_FPS), "-t", (clipMs / 1000).toFixed(3), "-i", scene.photoPath);
+    args.push("-loop", "1", "-framerate", String(PLAN_VIDEO_FPS), "-t", seconds(clipFrames(index)), "-i", scene.photoPath);
   });
   args.push("-i", input.voicePath);
   if (input.musicPath) args.push("-stream_loop", "-1", "-i", input.musicPath);
   const filters: string[] = [];
   input.scenes.forEach((scene, index) => {
-    const clipMs = clipLength(index);
-    const frames = Math.round((clipMs / 1000) * PLAN_VIDEO_FPS);
+    const frames = clipFrames(index);
     const full = scene.fullFrame === true;
     const box = full ? { width: PLAN_VIDEO_WIDTH, height: PLAN_VIDEO_HEIGHT } : foregroundBox(scene.photoWidth, scene.photoHeight);
     // Full-frame scenes are cropped to 9:16 and upscaled 1.5x (not 2x) to keep the zoom smooth without a 4K intermediate.
@@ -115,15 +120,15 @@ export function buildPlanVideoArguments(input: Readonly<{
       `[${index}:v]split[bgsrc${index}][fgsrc${index}]`,
       `[bgsrc${index}]scale=${PLAN_VIDEO_WIDTH}:${PLAN_VIDEO_HEIGHT}:force_original_aspect_ratio=increase,crop=${PLAN_VIDEO_WIDTH}:${PLAN_VIDEO_HEIGHT},gblur=sigma=30,eq=brightness=-0.06[bg${index}]`,
       `[fgsrc${index}]${zoomSource},zoompan=z='${motion.z}':x='${motion.x}':y='${motion.y}':d=1:s=${box.width}x${box.height}:fps=${PLAN_VIDEO_FPS}${tilt}[fg${index}]`,
-      `[bg${index}][fg${index}]overlay=${position}:shortest=1${handmade},trim=duration=${(clipMs / 1000).toFixed(3)},setpts=PTS-STARTPTS,format=yuv420p[s${index}]`
+      `[bg${index}][fg${index}]overlay=${position}:shortest=1${handmade},trim=duration=${seconds(frames)},setpts=PTS-STARTPTS,format=yuv420p[s${index}]`
     );
   });
   let stream = "s0";
-  let offsetMs = 0;
+  let offsetFrames = 0;
   for (let index = 1; index <= last; index++) {
-    offsetMs += input.sceneMs[index - 1]!;
+    offsetFrames += sceneFrames[index - 1]!;
     const transition = into(index);
-    filters.push(`[${stream}][s${index}]xfade=transition=${transition.name}:duration=${(transition.ms / 1000).toFixed(3)}:offset=${(offsetMs / 1000).toFixed(3)}[x${index}]`);
+    filters.push(`[${stream}][s${index}]xfade=transition=${transition.name}:duration=${seconds(transition.frames)}:offset=${seconds(offsetFrames)}[x${index}]`);
     stream = `x${index}`;
   }
   const font = filterPath(input.fontPath);

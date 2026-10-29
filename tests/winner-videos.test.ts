@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { canonicalizeVideoPlan, CreativeDnaService, CreativeFactoryService, WinnerJobRunner, WinnerVideoService } from "@koolezt/application";
 import type { VideoRenderer } from "@koolezt/application";
 import { InMemoryCreativeDnaStore, InMemoryCreativeStrategyStore, InMemoryFactoryRepository, InMemoryWinnerJobStore, InMemoryWinnerVideoStore } from "@koolezt/infrastructure";
-import { FakeExternalMediaDeliveryProvider, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, MetadataMediaInspector, PlanVideoRenderer, planTimeline, wrapText } from "@koolezt/media";
+import { FakeExternalMediaDeliveryProvider, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, MetadataMediaInspector, PlanVideoRenderer, buildPlanVideoArguments, planTimeline, wrapText } from "@koolezt/media";
 import { FakeCompositionProvider, FakeCreativeProvider, FakeSceneImageProvider, FakeVideoGenerationProvider, FakeVoiceProvider } from "@koolezt/providers";
 import { sceneImagePrompt } from "@koolezt/domain";
 import type { CreativeBrief, CreativeDnaPreprocessor } from "@koolezt/domain";
@@ -28,6 +28,24 @@ describe("video plan clean-up", () => {
     expect(plan.hookText.split(" ")).toHaveLength(8);
     expect(plan.ctaText.split(" ")).toHaveLength(6);
     expect(canonicalizeVideoPlan({ voiceover: "x", scenes: [{ photo: 1 }] }, ["photo-a"], 15_000)).toBeUndefined();
+  });
+
+  it("times every clip and transition in whole frames with spare frames, so the picture never ends early", () => {
+    // These scene lengths once made FFmpeg 6.1 stop the picture at 4.3s while the voice ran to 15s.
+    const scenes = ([[1286, "WHIP"], [1286, "WHIP"], [1714, "ZOOM"], [3750, "CUT"], [3214, "CUT"], [3750, "CUT"]] as const).map(([durationMs, transition]) => ({ photoPath: "p.jpg", photoWidth: 1024, photoHeight: 1536, motion: "ZOOM_IN" as const, caption: "", durationMs, fullFrame: true, transition }));
+    const { sceneMs, totalMs } = planTimeline(scenes, 15_000, 14_000);
+    const args = buildPlanVideoArguments({ scenes, sceneMs, totalMs, voicePath: "v.mp3", outputPath: "o.mp4", fontPath: "f.ttf", textLayers: [], threads: 2 });
+    const onFrame = (value: number) => Math.abs(value * 30 - Math.round(value * 30)) < 0.01;
+    const clipSeconds = args.flatMap((arg, at) => arg === "-t" && args[at + 2] === "-i" && args[at + 3] === "p.jpg" ? [Number(args[at + 1])] : []);
+    const graph = args[args.indexOf("-filter_complex") + 1]!;
+    const fades = [...graph.matchAll(/xfade=transition=\w+:duration=([\d.]+):offset=([\d.]+)/g)].map((match) => ({ duration: Number(match[1]), offset: Number(match[2]) }));
+    expect(clipSeconds).toHaveLength(6);
+    expect([...clipSeconds, ...fades.flatMap((fade) => [fade.duration, fade.offset])].every(onFrame)).toBe(true);
+    // Each clip outlasts the transition that leaves it by at least two frames.
+    fades.forEach((fade, at) => {
+      const clipStart = at === 0 ? 0 : fades[at - 1]!.offset;
+      expect(clipStart + clipSeconds[at]!).toBeGreaterThanOrEqual(fade.offset + fade.duration + 2 / 30 - 0.001);
+    });
   });
 
   it("wraps captions on word boundaries and lengthens the video when the voiceover is long", () => {
