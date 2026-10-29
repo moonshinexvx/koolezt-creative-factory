@@ -336,7 +336,7 @@ export type WinnerMeasurements = Readonly<{
   performance?: Readonly<{ spend?: number; purchases?: number; revenue?: number; cpa?: number; roas?: number; linkCtr?: number; cpc?: number; cpm?: number; currency?: string; dateStart?: string; dateEnd?: string; metricSource?: string; impressions?: number; threeSecondViews?: number; thruPlays?: number; hookRate?: number; holdRate?: number }>;
 }>;
 /** Background work for the winner-to-video app. Jobs run one at a time in the worker. */
-export type WinnerJobKind = "ANALYZE_WINNER" | "WRITE_VIDEO_PLANS" | "RENDER_VIDEO" | "GENERATE_SCENE_IMAGES";
+export type WinnerJobKind = "ANALYZE_WINNER" | "WRITE_CREATIVE_BRIEF" | "WRITE_VIDEO_PLANS" | "RENDER_VIDEO" | "GENERATE_SCENE_IMAGES";
 export type WinnerJobStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
 export type WinnerJob = Readonly<{
   id: string; kind: WinnerJobKind; targetId: string; operationKey: string; status: WinnerJobStatus; attempts: number;
@@ -356,12 +356,36 @@ export type VideoPlanMotion = (typeof VIDEO_PLAN_MOTIONS)[number];
 /** PHOTO_MOTION: smooth zoom/pan with fades. STOP_MOTION: the same photos moved in small jumps at about 7 frames a second, with hand-made shake, flicker and hard cuts. */
 export const VIDEO_PLAN_STYLES = ["PHOTO_MOTION", "STOP_MOTION"] as const;
 export type VideoPlanStyle = (typeof VIDEO_PLAN_STYLES)[number];
-/** imagePrompt and videoPrompt are ready to paste into OpenAI image generation and Kling/Seedance image-to-video; the app does not call those services yet. */
+/** Creative building blocks the marketing-director pipeline chooses from; every plan in a set uses a different format and hook type. */
+export const VIDEO_FORMATS = ["CUSTOMER_REVIEW", "BEFORE_AFTER", "THREE_REASONS", "GIFT_REACTION", "PET_POV_STORY", "DETAIL_CLOSEUPS", "PROBLEM_SOLUTION", "COMPARISON", "DAY_IN_THE_LIFE", "BOLD_STATEMENT"] as const;
+export type VideoFormat = (typeof VIDEO_FORMATS)[number];
+export const HOOK_TYPES = ["QUESTION", "POV", "STOP_SCROLLING", "BEFORE_AFTER", "BOLD_CLAIM", "CURIOSITY", "EMOTIONAL", "SOCIAL_PROOF"] as const;
+export type HookType = (typeof HOOK_TYPES)[number];
+/** CLASSIC: caption in a dark box. BOLD_POP: big words popping in two at a time. REVIEW: dark text in a white bubble, like a phone review. TITLE_CARD: white text on a brand-orange band. */
+export const VIDEO_CAPTION_STYLES = ["CLASSIC", "BOLD_POP", "REVIEW", "TITLE_CARD"] as const;
+export type VideoCaptionStyle = (typeof VIDEO_CAPTION_STYLES)[number];
+/** How a scene starts: CUT (hard cut), FADE, WHIP (fast slide) or ZOOM (punch-in). */
+export const VIDEO_TRANSITIONS = ["CUT", "FADE", "WHIP", "ZOOM"] as const;
+export type VideoTransition = (typeof VIDEO_TRANSITIONS)[number];
+export const MUSIC_MOODS = ["NONE", "UPBEAT", "WARM", "EMOTIONAL", "CALM"] as const;
+export type MusicMood = (typeof MUSIC_MOODS)[number];
+/** OpenAI text-to-speech voices a plan may choose. */
+export const VOICE_NAMES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "marin", "nova", "onyx", "sage", "shimmer", "verse", "cedar"] as const;
+
+/** imagePrompt and videoPrompt describe only this scene; the app adds the product rules. */
 export type SceneImageStatus = "GENERATING" | "READY" | "FAILED";
 /** sceneImageAssetId is an AI-made full-frame image for the scene (from imagePrompt); when present the video uses it instead of the product photo. */
 export type VideoPlanScene = Readonly<{
   photoAssetId: string; motion: VideoPlanMotion; caption: string; durationMs: number; imagePrompt?: string; videoPrompt?: string;
+  shotType?: string; voiceLine?: string; transition?: VideoTransition;
   sceneImageAssetId?: string; imageStatus?: SceneImageStatus; imageError?: string;
+}>;
+/** The marketing director's brief for one winner: who buys, why, and the angles and hooks worth testing. */
+export type CreativeBrief = Readonly<{
+  audience: string; buyerInsights: readonly string[];
+  angles: readonly Readonly<{ id: string; name: string; insight: string; whyItCouldWork: string }>[];
+  hooks: readonly Readonly<{ type: HookType; text: string }>[];
+  directorNotes: string;
 }>;
 /** Product rules added in front of every scene's own image prompt, so each prompt only has to describe its scene. Keep in sync with apps/web/src/make-videos.tsx. */
 export const SCENE_IMAGE_PRODUCT_RULES = "Use the attached product photo as the exact product. Keep its shape, colors, printed artwork, text and proportions identical; do not redraw, warp or restyle it. Vertical 9:16 photorealistic photo. No added text, logos or watermarks.";
@@ -373,8 +397,14 @@ export interface SceneImageProvider {
   generate(input: Readonly<{ prompt: string; referenceImages: readonly Readonly<{ bytes: Uint8Array; mimeType: string }>[] }>): Promise<Readonly<{ bytes: Uint8Array; mimeType: string; extension: string; model: string }>>;
 }
 /** One new video based on a winner: what it keeps, what it changes, and exactly what to render. Plans written before styles existed have no style and render as PHOTO_MOTION. */
-export type VideoPlan = Readonly<{ title: string; keepsFromWinner: string; changes: string; hookText: string; voiceover: string; scenes: readonly VideoPlanScene[]; ctaText: string; style?: VideoPlanStyle }>;
-export type WinnerVideoBatchStatus = "WRITING" | "READY" | "FAILED";
+export type VideoPlan = Readonly<{
+  title: string; keepsFromWinner: string; changes: string; hookText: string; voiceover: string; scenes: readonly VideoPlanScene[]; ctaText: string; style?: VideoPlanStyle;
+  format?: VideoFormat; angle?: string; hookType?: HookType; captionStyle?: VideoCaptionStyle; musicMood?: MusicMood; voice?: string; voiceStyle?: string;
+  /** The critic's verdict after reviewing (and possibly rewriting) the script. */
+  review?: Readonly<{ score: number; notes: string }>;
+}>;
+/** WRITING_BRIEF -> BRIEF_READY (owner picks angles) -> WRITING (scripts + review) -> READY. */
+export type WinnerVideoBatchStatus = "WRITING_BRIEF" | "BRIEF_READY" | "WRITING" | "READY" | "FAILED";
 export type WinnerVideoBatch = Readonly<{
   id: string; creativeReferenceId: string; productId: string; requestedCount: 3 | 6 | 12; targetDurationMs: 15_000 | 30_000;
   status: WinnerVideoBatchStatus; failureMessage?: string; providerMetadata: Readonly<Record<string, unknown>>; createdBy: string; createdAt: string; updatedAt: string;
@@ -396,6 +426,8 @@ export interface WinnerVideoRepository {
 }
 export type VideoPlanInput = Readonly<{
   requestedCount: 3 | 6 | 12; targetDurationMs: number; style: VideoPlanStyle;
+  /** Present when writing scripts: the brief and the angles the owner kept. */
+  brief?: CreativeBrief;
   product: Readonly<{ name: string; description: string; facts: readonly string[]; lookRules?: unknown }>;
   photos: readonly Readonly<{ index: number; label: string; mimeType: string; bytesBase64: string }>[];
   winner: Readonly<{ name: string; report?: unknown; dna?: unknown; measurements?: unknown; metaResults?: unknown }>;
@@ -989,6 +1021,10 @@ export interface CreativeProvider {
   retrieveStrategyConcepts?(responseId: string): Promise<StrategyProviderResponse>;
   /** Writes new video plans based on an analyzed winner; photos are referenced by their 1-based index. */
   planWinnerVideos?(input: VideoPlanInput, context: ProviderOperationContext): Promise<Readonly<{ plans: readonly unknown[]; submission: ProviderSubmission }>>;
+  /** Marketing-director step: audience, insights, angles and hooks for the winner. */
+  writeCreativeBrief?(input: VideoPlanInput, context: ProviderOperationContext): Promise<Readonly<{ brief: unknown; submission: ProviderSubmission }>>;
+  /** Critic step: scores each script and rewrites weak ones; returns the full set. */
+  reviewVideoPlans?(input: VideoPlanInput & Readonly<{ plans: readonly unknown[] }>, context: ProviderOperationContext): Promise<Readonly<{ plans: readonly unknown[]; submission: ProviderSubmission }>>;
   /** Explicit historical-ad analysis. Submission returns a durable background response ID. */
   submitCreativeDnaAnalysis?(input: CreativeDnaAnalysisInput, context: ProviderOperationContext): Promise<CreativeDnaProviderResponse>;
   /** Retrieves only the known response and must never create a replacement request. */

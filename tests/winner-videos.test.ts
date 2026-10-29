@@ -9,7 +9,7 @@ import { InMemoryCreativeDnaStore, InMemoryCreativeStrategyStore, InMemoryFactor
 import { FakeExternalMediaDeliveryProvider, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, MetadataMediaInspector, PlanVideoRenderer, planTimeline, wrapText } from "@koolezt/media";
 import { FakeCompositionProvider, FakeCreativeProvider, FakeSceneImageProvider, FakeVideoGenerationProvider, FakeVoiceProvider } from "@koolezt/providers";
 import { sceneImagePrompt } from "@koolezt/domain";
-import type { CreativeDnaPreprocessor } from "@koolezt/domain";
+import type { CreativeBrief, CreativeDnaPreprocessor } from "@koolezt/domain";
 
 const architecture = process.arch === "arm64" ? "arm64" : "x64";
 const ffmpeg = resolve(`node_modules/ffmpeg-static/ffmpeg${process.platform === "win32" ? ".exe" : ""}`);
@@ -17,13 +17,13 @@ const ffprobe = resolve(`node_modules/ffprobe-static/bin/${process.platform}/${a
 const preprocessor: CreativeDnaPreprocessor = { async preprocess() { return { mediaMetadata: { durationMs: 15_000, width: 720, height: 1280, hasAudio: true, mimeType: "video/mp4" }, frames: [{ timestampMs: 0, mimeType: "image/jpeg", bytesBase64: "a", sha256: "f" }] }; } };
 
 describe("video plan clean-up", () => {
-  it("maps photo numbers to product photos, drops unknown photos, and stretches scenes to the target length", () => {
+  it("maps photo numbers to product photos, uses the main photo for unknown ones, and stretches scenes to the target length", () => {
     const plan = canonicalizeVideoPlan({
       title: "  Night porch  ", keepsFromWinner: "Product first", changes: "New hook", hookText: "one two three four five six seven eight nine ten", voiceover: "Hello there.", ctaText: "Shop now please today friends forever",
       scenes: [{ photo: 1, motion: "ZOOM_IN", caption: "First", seconds: 2 }, { photo: 9, motion: "PAN_LEFT", caption: "Missing photo", seconds: 5 }, { photo: 2, motion: "SPIN", caption: "Second", seconds: 2 }]
     }, ["photo-a", "photo-b"], 15_000)!;
     expect(plan.title).toBe("Night porch");
-    expect(plan.scenes.map((scene) => [scene.photoAssetId, scene.motion])).toEqual([["photo-a", "ZOOM_IN"], ["photo-b", "ZOOM_IN"]]);
+    expect(plan.scenes.map((scene) => [scene.photoAssetId, scene.motion])).toEqual([["photo-a", "ZOOM_IN"], ["photo-a", "PAN_LEFT"], ["photo-b", "ZOOM_IN"]]);
     expect(plan.scenes.reduce((sum, scene) => sum + scene.durationMs, 0)).toBe(15_000);
     expect(plan.hookText.split(" ")).toHaveLength(8);
     expect(plan.ctaText.split(" ")).toHaveLength(6);
@@ -59,8 +59,17 @@ async function harness(options: Readonly<{ renderer?: VideoRenderer; loadAverage
   const renderer: VideoRenderer = options.renderer ?? { probe: vi.fn(async () => ({ width: 1200, height: 1500, durationMs: 4_000 })), render: vi.fn(async () => ({ bytes: new Uint8Array([0, 0, 0, 24, ...Buffer.from("ftypisom")]), durationMs: 15_000 })) };
   const sceneImages = new FakeSceneImageProvider({ bytes: new Uint8Array(await readFile(join(root, "photo.jpg"))), mimeType: "image/jpeg", extension: "jpg" });
   const service = new WinnerVideoService({ repository, dna, videos, jobs, provider, voice: new FakeVoiceProvider(resolve("tests/fixtures/vertical-1080x1920.mp4")), storage, renderer, sceneImages, ...(options.loadAverage ? { loadAverage: options.loadAverage } : {}) });
-  const runner = new WinnerJobRunner({ jobs, handlers: { ANALYZE_WINNER: (job) => dnaService.runJob(job), WRITE_VIDEO_PLANS: (job) => service.writePlans(job), RENDER_VIDEO: (job) => service.renderVideo(job), GENERATE_SCENE_IMAGES: (job) => service.generateSceneImages(job) } });
-  const drain = async () => { let count = 0; while (await runner.runOnce()) count++; return count; };
+  const runner = new WinnerJobRunner({ jobs, handlers: { ANALYZE_WINNER: (job) => dnaService.runJob(job), WRITE_CREATIVE_BRIEF: (job) => service.writeBrief(job), WRITE_VIDEO_PLANS: (job) => service.writePlans(job), RENDER_VIDEO: (job) => service.renderVideo(job), GENERATE_SCENE_IMAGES: (job) => service.generateSceneImages(job) } });
+  // Runs every due job; briefs waiting for the owner are approved with all their angles so plan tests can go end to end.
+  const drain = async () => {
+    let count = 0;
+    for (;;) {
+      while (await runner.runOnce()) count++;
+      const waiting = (await videos.listBatches()).filter((batch) => batch.status === "BRIEF_READY");
+      if (!waiting.length) return count;
+      for (const batch of waiting) await service.approveBrief(batch.id, (batch.providerMetadata.brief as CreativeBrief).angles.map((angle) => angle.id));
+    }
+  };
   return { root, repository, dna, jobs, videos, storage, provider, sceneImages, product, photo, reference, dnaService, service, runner, renderer, drain, dispose: () => rm(root, { recursive: true, force: true }) };
 }
 
@@ -218,4 +227,50 @@ describe("winner to videos", () => {
       expect(await setup.videos.getVideo(video!.id)).toMatchObject({ status: "READY" });
     } finally { await setup.dispose(); }
   }, 120_000);
+
+  it("writes a creative brief first, then scripts only from the angles the owner kept, reviewed by a critic", async () => {
+    const setup = await harness();
+    try {
+      await setup.dnaService.requestAnalysis(setup.reference.id, crypto.randomUUID());
+      await setup.drain();
+      const scriptsSpy = vi.spyOn(setup.provider, "planWinnerVideos");
+      const batch = await setup.service.requestPlans({ referenceId: setup.reference.id, count: 3, durationSeconds: 15, actor: "owner" });
+      expect(batch.status).toBe("WRITING_BRIEF");
+      while (await setup.runner.runOnce()) { /* brief only */ }
+      const briefed = await setup.videos.getBatch(batch.id);
+      expect(briefed.status).toBe("BRIEF_READY");
+      const brief = briefed.providerMetadata.brief as CreativeBrief;
+      expect(brief.angles.map((angle) => angle.id)).toEqual(["a1", "a2", "a3"]);
+      expect(scriptsSpy).not.toHaveBeenCalled();
+      await expect(setup.service.approveBrief(batch.id, ["nope"])).rejects.toMatchObject({ code: "CREATIVE_BRIEF_ANGLES_REQUIRED" });
+      await setup.service.approveBrief(batch.id, ["a2", "a3"]);
+      await setup.drain();
+      expect(scriptsSpy.mock.calls[0]![0].brief!.angles.map((angle) => angle.id)).toEqual(["a2", "a3"]);
+      const videos = await setup.videos.listVideos(batch.id);
+      expect(videos).toHaveLength(3);
+      expect(videos[0]!.plan).toMatchObject({ angle: "Perfect gift", format: "CUSTOMER_REVIEW", captionStyle: "BOLD_POP", musicMood: "UPBEAT", voice: "nova", review: { score: 8.5 } });
+      expect(videos[0]!.plan.scenes[1]).toMatchObject({ shotType: "close-up", voiceLine: "Line 2.", transition: "WHIP" });
+      expect((await setup.videos.getBatch(batch.id)).providerMetadata).toMatchObject({ reviewModel: "fake-review-v1" });
+      // Owner edits keep the creative fields.
+      const edited = await setup.service.editPlan(videos[0]!.id, { ...videos[0]!.plan, captionStyle: "REVIEW", title: "Mine" });
+      expect(edited.plan).toMatchObject({ title: "Mine", captionStyle: "REVIEW", format: "CUSTOMER_REVIEW" });
+      expect(edited.plan.scenes[1]).toMatchObject({ shotType: "close-up", transition: "WHIP" });
+    } finally { await setup.dispose(); }
+  });
+
+  it("keeps the drafts when the critic fails and lets the owner discard a brief", async () => {
+    const setup = await harness();
+    try {
+      await setup.dnaService.requestAnalysis(setup.reference.id, crypto.randomUUID());
+      await setup.drain();
+      vi.spyOn(setup.provider, "reviewVideoPlans").mockRejectedValueOnce(new Error("review timed out"));
+      const batch = await setup.service.requestPlans({ referenceId: setup.reference.id, count: 3, durationSeconds: 15, actor: "owner" });
+      await setup.drain();
+      expect(await setup.videos.getBatch(batch.id)).toMatchObject({ status: "READY", providerMetadata: { reviewError: "review timed out" } });
+      expect((await setup.videos.listVideos(batch.id))[0]!.plan.review).toBeUndefined();
+      const second = await setup.service.requestPlans({ referenceId: setup.reference.id, count: 3, durationSeconds: 15, actor: "owner" });
+      while (await setup.runner.runOnce()) { /* brief only */ }
+      expect(await setup.service.discardBrief(second.id)).toMatchObject({ status: "FAILED", failureMessage: "Discarded by the owner." });
+    } finally { await setup.dispose(); }
+  });
 });

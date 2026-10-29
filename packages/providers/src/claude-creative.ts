@@ -2,11 +2,16 @@ import Anthropic from "@anthropic-ai/sdk";
 import { DomainError } from "@koolezt/domain";
 import type { ConceptProviderResponse, CreativeConceptProviderDraft, CreativeDnaAnalysisInput, CreativeInputSnapshot, CreativeProvider, ExecutionFeasibilityPlan, NarrationRewriteInput, ProviderOperationContext, ProviderSubmission, StrategyGenerationInput, StrategyProviderResponse, VariantCreativePackageDraft, VariantPackageGenerationInput, VideoPlanInput } from "@koolezt/domain";
 import { OPENAI_CREATIVE_INSTRUCTIONS as CREATIVE_INSTRUCTIONS, OPENAI_CREATIVE_PROMPT_VERSION as CREATIVE_PROMPT_VERSION, OPENAI_NARRATION_REWRITE_INSTRUCTIONS as NARRATION_REWRITE_INSTRUCTIONS } from "./openai-creative-prompt.js";
-import { backgroundConceptInstructions, conceptInstructions, DNA_ANALYSIS_INSTRUCTIONS, dnaSchema, VIDEO_PLAN_INSTRUCTIONS, videoPlansSchema, WINNER_REPORT_SYSTEM, legacyConceptSchema, narrationRewriteSchema, referenceCatalog, strategyExecutionSchemaFor, strategyInstructions, strategyProviderInput, strategySchemaFor, VARIANT_PACKAGE_INSTRUCTIONS, variantPackageSchema } from "./creative-contract.js";
+import { backgroundConceptInstructions, conceptInstructions, CREATIVE_BRIEF_INSTRUCTIONS, DNA_ANALYSIS_INSTRUCTIONS, dnaSchema, VIDEO_REVIEW_INSTRUCTIONS, VIDEO_SCRIPT_INSTRUCTIONS, WINNER_REPORT_SYSTEM, legacyConceptSchema, narrationRewriteSchema, referenceCatalog, strategyExecutionSchemaFor, strategyInstructions, strategyProviderInput, strategySchemaFor, VARIANT_PACKAGE_INSTRUCTIONS, variantPackageSchema } from "./creative-contract.js";
 
 export type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
 type JsonSchema = Readonly<Record<string, unknown>>;
 type ImageBlock = Anthropic.Beta.BetaImageBlockParam;
+const plansOf = (outputText: string): unknown[] => {
+  const parsed = JSON.parse(outputText) as { plans?: unknown };
+  if (!Array.isArray(parsed.plans)) throw new DomainError("CLAUDE_VIDEO_PLANS_INVALID", "Claude did not return a list of scripts.");
+  return parsed.plans;
+};
 type ClaudeCallResult = Readonly<{ id: string; model: string; outputText: string; usage: Readonly<{ inputTokens: number; outputTokens: number; totalTokens: number }> }>;
 
 // Structured outputs reject numeric, string-length, and array-size keywords. They are removed from
@@ -250,18 +255,42 @@ export class ClaudeCreativeProvider implements CreativeProvider {
     return merged;
   }
 
-  async planWinnerVideos(input: VideoPlanInput, context: ProviderOperationContext): Promise<Readonly<{ plans: readonly unknown[]; submission: ProviderSubmission }>> {
+  /** Product photos as image blocks plus the JSON payload without the raw bytes (photos are referred to by number). */
+  private planPayload(input: VideoPlanInput, context: ProviderOperationContext, extra: Record<string, unknown> = {}) {
     const { photos, ...rest } = input;
     const images = photos.map((photo): ImageBlock => ({ type: "image", source: { type: "base64", media_type: photo.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: photo.bytesBase64 } }));
+    return { images, payload: { operationKey: context.operationKey, ...rest, ...extra, photos: photos.map((photo) => ({ number: photo.index, label: photo.label })) } };
+  }
+
+  async writeCreativeBrief(input: VideoPlanInput, context: ProviderOperationContext): Promise<Readonly<{ brief: unknown; submission: ProviderSubmission }>> {
+    const { images, payload } = this.planPayload(input, context);
     try {
-      const result = await this.call({
-        system: VIDEO_PLAN_INSTRUCTIONS(input.requestedCount, Math.round(input.targetDurationMs / 1000), input.style),
-        payload: { operationKey: context.operationKey, ...rest, photos: photos.map((photo) => ({ number: photo.index, label: photo.label })) },
-        images, schema: videoPlansSchema, effort: this.backgroundEffort, timeoutMs: this.backgroundTimeoutMs, invalidCode: "CLAUDE_VIDEO_PLANS_INVALID"
-      });
-      return { plans: (JSON.parse(result.outputText) as { plans: unknown[] }).plans, submission: this.submission(result, context, "winner-video-plans/v1") };
+      const result = await this.call({ system: CREATIVE_BRIEF_INSTRUCTIONS(input.requestedCount, input.style), payload, images, effort: this.backgroundEffort, timeoutMs: this.backgroundTimeoutMs, invalidCode: "CLAUDE_CREATIVE_BRIEF_INVALID" });
+      return { brief: JSON.parse(result.outputText) as unknown, submission: this.submission(result, context, "creative-brief/v1") };
+    } catch (error) {
+      this.interactiveFailure(error, "CLAUDE_CREATIVE_BRIEF_INVALID", "CLAUDE_CREATIVE_BRIEF_SUBMISSION_UNKNOWN", "creative brief");
+    }
+  }
+
+  async planWinnerVideos(input: VideoPlanInput, context: ProviderOperationContext): Promise<Readonly<{ plans: readonly unknown[]; submission: ProviderSubmission }>> {
+    const { images, payload } = this.planPayload(input, context);
+    try {
+      const result = await this.call({ system: VIDEO_SCRIPT_INSTRUCTIONS(input.requestedCount, Math.round(input.targetDurationMs / 1000), input.style), payload, images, effort: this.backgroundEffort, timeoutMs: this.backgroundTimeoutMs, invalidCode: "CLAUDE_VIDEO_PLANS_INVALID" });
+      return { plans: plansOf(result.outputText), submission: this.submission(result, context, "winner-video-scripts/v2") };
     } catch (error) {
       this.interactiveFailure(error, "CLAUDE_VIDEO_PLANS_INVALID", "CLAUDE_VIDEO_PLANS_SUBMISSION_UNKNOWN", "video plan");
+    }
+  }
+
+  /** The critic sees the photos too, so it can judge whether shots fit the product. */
+  async reviewVideoPlans(input: VideoPlanInput & Readonly<{ plans: readonly unknown[] }>, context: ProviderOperationContext): Promise<Readonly<{ plans: readonly unknown[]; submission: ProviderSubmission }>> {
+    const { plans, ...rest } = input;
+    const { images, payload } = this.planPayload(rest, context, { draftScripts: plans });
+    try {
+      const result = await this.call({ system: VIDEO_REVIEW_INSTRUCTIONS(Math.round(input.targetDurationMs / 1000)), payload, images, effort: this.backgroundEffort, timeoutMs: this.backgroundTimeoutMs, invalidCode: "CLAUDE_VIDEO_REVIEW_INVALID" });
+      return { plans: plansOf(result.outputText), submission: this.submission(result, context, "winner-video-review/v1") };
+    } catch (error) {
+      this.interactiveFailure(error, "CLAUDE_VIDEO_REVIEW_INVALID", "CLAUDE_VIDEO_REVIEW_SUBMISSION_UNKNOWN", "script review");
     }
   }
 

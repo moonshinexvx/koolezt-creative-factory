@@ -170,9 +170,10 @@ export function createRuntime(env = process.env) {
   // Videos are voiced with the configured voice and rendered on this server at the lowest priority, two threads at most.
   const winnerVideos = new WinnerVideoService({ repository, dna: creativeDna, videos: winnerVideoStore, jobs: winnerJobs, provider: creativeProvider, voice: voiceProvider, storage,
     renderer: new PlanVideoRenderer({ ffmpegPath: env.FFMPEG_PATH ?? "ffmpeg", ffprobePath: env.FFPROBE_PATH ?? "ffprobe", threads: Number(env.VIDEO_RENDER_THREADS ?? "2") }),
+    musicRoot: resolve(env.MUSIC_ROOT ?? "var/music"),
     voiceProfileId: env.OPENAI_VOICE_NAME ?? "marin", maxLoadAverage: Number(env.VIDEO_RENDER_MAX_LOAD ?? "2.5"),
     ...(env.OPENAI_API_KEY ? { sceneImages: new OpenAISceneImageProvider({ apiKey: env.OPENAI_API_KEY, model: env.OPENAI_IMAGE_MODEL ?? "gpt-image-2", quality: env.OPENAI_IMAGE_QUALITY ?? "medium", size: env.OPENAI_IMAGE_SIZE ?? "1024x1536" }) } : {}) });
-  const winnerJobRunner = new WinnerJobRunner({ jobs: winnerJobs, handlers: { ANALYZE_WINNER: (job) => creativeDnaService.runJob(job), WRITE_VIDEO_PLANS: (job) => winnerVideos.writePlans(job), RENDER_VIDEO: (job) => winnerVideos.renderVideo(job), GENERATE_SCENE_IMAGES: (job) => winnerVideos.generateSceneImages(job) } });
+  const winnerJobRunner = new WinnerJobRunner({ jobs: winnerJobs, handlers: { ANALYZE_WINNER: (job) => creativeDnaService.runJob(job), WRITE_CREATIVE_BRIEF: (job) => winnerVideos.writeBrief(job), WRITE_VIDEO_PLANS: (job) => winnerVideos.writePlans(job), RENDER_VIDEO: (job) => winnerVideos.renderVideo(job), GENERATE_SCENE_IMAGES: (job) => winnerVideos.generateSceneImages(job) } });
   return {
     metaWinners,
     winnerJobs,

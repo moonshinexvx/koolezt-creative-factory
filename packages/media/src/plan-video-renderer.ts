@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DomainError } from "@koolezt/domain";
-import type { VideoPlanMotion, VideoPlanStyle } from "@koolezt/domain";
+import type { VideoCaptionStyle, VideoPlanMotion, VideoPlanStyle, VideoTransition } from "@koolezt/domain";
 
 export const PLAN_VIDEO_WIDTH = 1080;
 export const PLAN_VIDEO_HEIGHT = 1920;
@@ -12,6 +12,11 @@ export const PLAN_VIDEO_FPS = 30;
 const TRANSITION_MS = 300;
 /** Stop motion: a hard cut (one frame) between scenes, and the picture moves only every STOP_MOTION_STEP frames (about 7.5 a second). */
 const CUT_MS = 34;
+/** FFmpeg xfade transition and its length for each way a scene can start. */
+const TRANSITIONS: Readonly<Record<VideoTransition, Readonly<{ name: string; ms: number }>>> = {
+  CUT: { name: "fade", ms: CUT_MS }, FADE: { name: "fade", ms: TRANSITION_MS }, WHIP: { name: "slideleft", ms: 250 }, ZOOM: { name: "zoomin", ms: 300 }
+};
+const MUSIC_VOLUME = 0.12;
 const STOP_MOTION_STEP = 4;
 const VOICE_LEAD_IN_MS = 300;
 const VOICE_TAIL_MS = 700;
@@ -19,8 +24,9 @@ const CTA_MS = 2_500;
 const MOTION_ZOOM = 0.12;
 
 /** fullFrame: the image is a finished scene (AI scene image) and fills the whole frame instead of sitting on a blurred background. */
-export type PlanRenderScene = Readonly<{ photoPath: string; photoWidth: number; photoHeight: number; motion: VideoPlanMotion; caption: string; durationMs: number; fullFrame?: boolean }>;
-export type PlanRenderInput = Readonly<{ scenes: readonly PlanRenderScene[]; hookText: string; ctaText: string; voicePath: string; voiceDurationMs: number; targetDurationMs: number; style?: VideoPlanStyle }>;
+export type PlanRenderScene = Readonly<{ photoPath: string; photoWidth: number; photoHeight: number; motion: VideoPlanMotion; caption: string; durationMs: number; fullFrame?: boolean; transition?: VideoTransition }>;
+export type PlanRenderInput = Readonly<{ scenes: readonly PlanRenderScene[]; hookText: string; ctaText: string; voicePath: string; voiceDurationMs: number; targetDurationMs: number; style?: VideoPlanStyle;
+  captionStyle?: VideoCaptionStyle; musicPath?: string }>;
 
 /** Greedy word wrap; words longer than a line are kept whole rather than split mid-word. */
 export function wrapText(text: string, maxChars: number, maxLines: number): string[] {
@@ -70,25 +76,28 @@ export function filterPath(path: string): string {
   return path.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
 }
 
-type TextLayer = Readonly<{ file: string; fontSize: number; y: number; startMs: number; endMs: number; box?: string; border?: number }>;
+type TextLayer = Readonly<{ file: string; fontSize: number; y: number; startMs: number; endMs: number; box?: string; border?: number; color?: string }>;
 
 /** Builds the FFmpeg argument list for one plan video. Pure: the caller writes the text files it references. */
 export function buildPlanVideoArguments(input: Readonly<{
   scenes: readonly PlanRenderScene[]; sceneMs: readonly number[]; totalMs: number; voicePath: string; outputPath: string;
-  fontPath: string; textLayers: readonly TextLayer[]; threads: number; style?: VideoPlanStyle;
+  fontPath: string; textLayers: readonly TextLayer[]; threads: number; style?: VideoPlanStyle; musicPath?: string;
 }>): string[] {
   const args = ["-hide_banner", "-loglevel", "error", "-y"];
   const last = input.scenes.length - 1;
   const stop = input.style === "STOP_MOTION";
-  const transitionMs = stop ? CUT_MS : TRANSITION_MS;
+  // How scene i starts; stop motion always uses hard cuts. Each clip runs on by the length of the next transition.
+  const into = (index: number) => TRANSITIONS[stop ? "CUT" : input.scenes[index]?.transition ?? "FADE"];
+  const clipLength = (index: number) => input.sceneMs[index]! + (index < last ? into(index + 1).ms : 0);
   input.scenes.forEach((scene, index) => {
-    const clipMs = input.sceneMs[index]! + (index < last ? transitionMs : 0);
+    const clipMs = clipLength(index);
     args.push("-loop", "1", "-framerate", String(PLAN_VIDEO_FPS), "-t", (clipMs / 1000).toFixed(3), "-i", scene.photoPath);
   });
   args.push("-i", input.voicePath);
+  if (input.musicPath) args.push("-stream_loop", "-1", "-i", input.musicPath);
   const filters: string[] = [];
   input.scenes.forEach((scene, index) => {
-    const clipMs = input.sceneMs[index]! + (index < last ? transitionMs : 0);
+    const clipMs = clipLength(index);
     const frames = Math.round((clipMs / 1000) * PLAN_VIDEO_FPS);
     const full = scene.fullFrame === true;
     const box = full ? { width: PLAN_VIDEO_WIDTH, height: PLAN_VIDEO_HEIGHT } : foregroundBox(scene.photoWidth, scene.photoHeight);
@@ -113,14 +122,21 @@ export function buildPlanVideoArguments(input: Readonly<{
   let offsetMs = 0;
   for (let index = 1; index <= last; index++) {
     offsetMs += input.sceneMs[index - 1]!;
-    filters.push(`[${stream}][s${index}]xfade=transition=fade:duration=${(transitionMs / 1000).toFixed(3)}:offset=${(offsetMs / 1000).toFixed(3)}[x${index}]`);
+    const transition = into(index);
+    filters.push(`[${stream}][s${index}]xfade=transition=${transition.name}:duration=${(transition.ms / 1000).toFixed(3)}:offset=${(offsetMs / 1000).toFixed(3)}[x${index}]`);
     stream = `x${index}`;
   }
   const font = filterPath(input.fontPath);
-  const text = input.textLayers.map((layer) => `drawtext=fontfile='${font}':textfile='${filterPath(layer.file)}':fontcolor=white:fontsize=${layer.fontSize}:x=(w-text_w)/2:y=${layer.y}${layer.border ? `:borderw=${layer.border}:bordercolor=black` : ""}${layer.box ? `:box=1:boxcolor=${layer.box}:boxborderw=22` : ""}:enable='between(t,${(layer.startMs / 1000).toFixed(3)},${(layer.endMs / 1000).toFixed(3)})'`);
+  const text = input.textLayers.map((layer) => `drawtext=fontfile='${font}':textfile='${filterPath(layer.file)}':fontcolor=${layer.color ?? "white"}:fontsize=${layer.fontSize}:x=(w-text_w)/2:y=${layer.y}${layer.border ? `:borderw=${layer.border}:bordercolor=black` : ""}${layer.box ? `:box=1:boxcolor=${layer.box}:boxborderw=22` : ""}:enable='between(t,${(layer.startMs / 1000).toFixed(3)},${(layer.endMs / 1000).toFixed(3)})'`);
   filters.push(`[${stream}]${text.length ? text.join(",") : "null"},trim=duration=${(input.totalMs / 1000).toFixed(3)}[v]`);
   const totalSec = (input.totalMs / 1000).toFixed(3);
-  filters.push(`[${input.scenes.length}:a]adelay=${VOICE_LEAD_IN_MS}|${VOICE_LEAD_IN_MS},apad,atrim=0:${totalSec},afade=t=out:st=${Math.max(0, input.totalMs / 1000 - 0.4).toFixed(3)}:d=0.4,alimiter=limit=0.95[a]`);
+  const voice = `[${input.scenes.length}:a]adelay=${VOICE_LEAD_IN_MS}|${VOICE_LEAD_IN_MS},apad,atrim=0:${totalSec},afade=t=out:st=${Math.max(0, input.totalMs / 1000 - 0.4).toFixed(3)}:d=0.4`;
+  if (input.musicPath) {
+    // Music sits quietly under the voice, fades in and out, and is looped or cut to the video length.
+    filters.push(`${voice}[vo]`, `[${input.scenes.length + 1}:a]volume=${MUSIC_VOLUME},atrim=0:${totalSec},afade=t=in:st=0:d=0.6,afade=t=out:st=${Math.max(0, input.totalMs / 1000 - 1.2).toFixed(3)}:d=1.2[music]`, `[vo][music]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[a]`);
+  } else {
+    filters.push(`${voice},alimiter=limit=0.95[a]`);
+  }
   args.push("-filter_complex", filters.join(";"), "-filter_complex_threads", String(input.threads), "-map", "[v]", "-map", "[a]",
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-threads", String(input.threads), "-pix_fmt", "yuv420p", "-r", String(PLAN_VIDEO_FPS),
     "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", "-t", totalSec, input.outputPath);
@@ -180,6 +196,21 @@ export class PlanVideoRenderer {
           layers.push({ ...layer, file, y: base.y + index * base.lineHeight });
         }
       };
+      const captionStyle = input.captionStyle ?? "CLASSIC";
+      const addCaption = async (name: string, value: string, startMs: number, endMs: number) => {
+        if (captionStyle === "BOLD_POP") {
+          // Big words pop in two at a time across the scene.
+          const chunks = value.trim().split(/\s+/).reduce<string[]>((list, word, at) => { if (at % 2 === 0) list.push(word); else list[list.length - 1] += ` ${word}`; return list; }, []);
+          const slice = (endMs - startMs) / chunks.length;
+          for (const [at, chunk] of chunks.entries()) await addText(`${name}-${at}`, chunk.toUpperCase(), 13, 2, { fontSize: 104, border: 9, startMs: Math.round(startMs + at * slice), endMs: Math.round(startMs + (at + 1) * slice), y: Math.round(PLAN_VIDEO_HEIGHT * 0.64), lineHeight: 118 });
+        } else if (captionStyle === "REVIEW") {
+          await addText(name, value, 26, 3, { fontSize: 50, box: "white@0.95", color: "0x152746", startMs, endMs, y: Math.round(PLAN_VIDEO_HEIGHT * 0.7), lineHeight: 76 });
+        } else if (captionStyle === "TITLE_CARD") {
+          await addText(name, value.toUpperCase(), 20, 2, { fontSize: 64, box: "0xE95B28@0.95", startMs, endMs, y: Math.round(PLAN_VIDEO_HEIGHT * 0.72), lineHeight: 96 });
+        } else {
+          await addText(name, value, 24, 2, { fontSize: 58, box: "black@0.5", startMs, endMs, y: Math.round(PLAN_VIDEO_HEIGHT * 0.73), lineHeight: 84 });
+        }
+      };
       const hookEnd = Math.min(sceneMs[0]!, 3_200);
       if (input.hookText.trim()) await addText("hook", input.hookText, 18, 3, { fontSize: 78, border: 7, startMs: 150, endMs: hookEnd, y: Math.round(PLAN_VIDEO_HEIGHT * 0.1), lineHeight: 96 });
       let start = 0;
@@ -187,12 +218,12 @@ export class PlanVideoRenderer {
         const end = start + sceneMs[index]!;
         const captionStart = index === 0 ? hookEnd : start + 150;
         const captionEnd = index === input.scenes.length - 1 ? Math.min(end, totalMs - CTA_MS) : end;
-        if (scene.caption.trim() && captionEnd - captionStart > 600) await addText(`caption${index}`, scene.caption, 24, 2, { fontSize: 58, box: "black@0.5", startMs: captionStart, endMs: captionEnd, y: Math.round(PLAN_VIDEO_HEIGHT * 0.73), lineHeight: 84 });
+        if (scene.caption.trim() && captionEnd - captionStart > 600) await addCaption(`caption${index}`, scene.caption, captionStart, captionEnd);
         start = end;
       }
       if (input.ctaText.trim()) await addText("cta", input.ctaText, 20, 2, { fontSize: 68, box: "0xE95B28@0.92", startMs: totalMs - CTA_MS, endMs: totalMs, y: Math.round(PLAN_VIDEO_HEIGHT * 0.78), lineHeight: 100 });
       const outputPath = join(root, "video.mp4");
-      const args = buildPlanVideoArguments({ scenes: input.scenes, sceneMs, totalMs, voicePath: input.voicePath, outputPath, fontPath, textLayers: layers, threads: this.options.threads ?? 2, ...(input.style ? { style: input.style } : {}) });
+      const args = buildPlanVideoArguments({ scenes: input.scenes, sceneMs, totalMs, voicePath: input.voicePath, outputPath, fontPath, textLayers: layers, threads: this.options.threads ?? 2, ...(input.style ? { style: input.style } : {}), ...(input.musicPath ? { musicPath: input.musicPath } : {}) });
       const lowPriority = (this.options.lowPriority ?? true) && process.platform === "linux";
       // nice 19 + ionice idle: the kernel serves every other process first.
       if (lowPriority) await runProcess("nice", ["-n", "19", "ionice", "-c", "3", this.ffmpeg, ...args], this.options.timeoutMs ?? 600_000);
