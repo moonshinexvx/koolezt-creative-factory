@@ -208,7 +208,7 @@ export class FakeCreativeProvider implements CreativeProvider {
 
   async reviewVideoPlans(input: VideoPlanInput & Readonly<{ plans: readonly unknown[] }>, context: ProviderOperationContext): Promise<Readonly<{ plans: readonly unknown[]; submission: ProviderSubmission }>> {
     this.calls.push(context);
-    const plans = input.plans.map((plan) => ({ ...(plan as Record<string, unknown>), review: { score: 8.5, notes: "Strong hook; tightened the call to action." } }));
+    const plans = input.plans.map((plan) => ({ ...(plan as Record<string, unknown>), review: { checks: { hook: "STRONG", story: "OK", shots: "STRONG", callToAction: "OK", claims: "VERIFIED" }, changed: "Tightened the call to action.", watchOut: "The middle scene may feel slow." } }));
     return { plans, submission: { provider: "fake", model: "fake-review-v1", providerTaskId: `fake-review-${context.operationKey}`, requestId: `fake-review-${context.operationKey}`, metadata: { operationKey: context.operationKey } } };
   }
 

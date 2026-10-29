@@ -144,6 +144,12 @@ Respond with exactly one JSON object and nothing else: ${SCRIPT_SHAPE}`;
 
 export const VIDEO_REVIEW_INSTRUCTIONS = (seconds: number) => `${DIRECTOR_ROLE}
 You are now reviewing your team's scripts before production, as a demanding performance marketer who has seen thousands of ads. The input holds the brief, the product facts and the draft scripts.
-For each script: score it from 1 to 10 on how likely it is to stop the scroll and sell (hook strength in the first 2 seconds, story clarity, emotional pull, variety of shots, a clear call to action, and truthfulness against the product facts). If a script scores below 8, rewrite the weak parts (usually the hook, the opening shots, flat captions or a feature-list voiceover) until it deserves at least 8. Remove any claim that is not in the product facts. Keep each script's angle and format, keep the set varied (no two scripts with the same format or hookType), keep ${seconds} seconds in total per script, and keep every field.
-Add "review": {"score": number (the score after your rewrite), "notes": string (one or two plain sentences on what is strong and what you changed)} to every script.
-Respond with exactly one JSON object and nothing else, with all scripts in the same order: ${SCRIPT_SHAPE.replace('"scenes": [', '"review": {"score": number, "notes": string}, "scenes": [')}`;
+For each script, check honestly and independently (scripts differ, so their checks should differ too):
+- hook: does the first 2 seconds (hookText plus the first shot) stop a scrolling dog or cat owner? STRONG, OK or WEAK.
+- story: is there a clear arc (hook, desire, payoff with the product, reason to believe, call to action) rather than a feature list? STRONG, OK or WEAK.
+- shots: do the shots vary (different shot types, mockups and settings) and fit the voice lines? STRONG, OK or WEAK.
+- callToAction: is the ending clear and specific? STRONG, OK or WEAK.
+- claims: VERIFIED if every claim is in the product facts; if not, remove or reword those claims and mark FIXED.
+Rewrite anything WEAK until it is at least OK, then report the checks after your rewrite. Keep each script's angle and format, keep the set varied (no two scripts with the same format or hookType), keep ${seconds} seconds in total per script, and keep every field.
+Add "review": {"checks": {"hook": string, "story": string, "shots": string, "callToAction": string, "claims": string}, "changed": string (one plain sentence on what you rewrote, or "Nothing" if you changed nothing), "watchOut": string (the single biggest remaining risk of this ad, in one plain sentence)} to every script.
+Respond with exactly one JSON object and nothing else, with all scripts in the same order: ${SCRIPT_SHAPE.replace('"scenes": [', '"review": {"checks": {"hook": string, "story": string, "shots": string, "callToAction": string, "claims": string}, "changed": string, "watchOut": string}, "scenes": [')}`;

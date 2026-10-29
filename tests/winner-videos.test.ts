@@ -248,7 +248,7 @@ describe("winner to videos", () => {
       expect(scriptsSpy.mock.calls[0]![0].brief!.angles.map((angle) => angle.id)).toEqual(["a2", "a3"]);
       const videos = await setup.videos.listVideos(batch.id);
       expect(videos).toHaveLength(3);
-      expect(videos[0]!.plan).toMatchObject({ angle: "Perfect gift", format: "CUSTOMER_REVIEW", captionStyle: "BOLD_POP", musicMood: "UPBEAT", voice: "nova", review: { score: 8.5 } });
+      expect(videos[0]!.plan).toMatchObject({ angle: "Perfect gift", format: "CUSTOMER_REVIEW", captionStyle: "BOLD_POP", musicMood: "UPBEAT", voice: "nova", review: { checks: { hook: "STRONG", claims: "VERIFIED" }, watchOut: "The middle scene may feel slow." } });
       expect(videos[0]!.plan.scenes[1]).toMatchObject({ shotType: "close-up", voiceLine: "Line 2.", transition: "WHIP" });
       expect((await setup.videos.getBatch(batch.id)).providerMetadata).toMatchObject({ reviewModel: "fake-review-v1" });
       // Owner edits keep the creative fields.

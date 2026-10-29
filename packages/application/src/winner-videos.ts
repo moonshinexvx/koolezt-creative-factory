@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
-import { DomainError, HOOK_TYPES, MUSIC_MOODS, sceneImagePrompt, VIDEO_CAPTION_STYLES, VIDEO_FORMATS, VIDEO_PLAN_MOTIONS, VIDEO_PLAN_STYLES, VIDEO_TRANSITIONS, VOICE_NAMES } from "@koolezt/domain";
+import { DomainError, HOOK_TYPES, MUSIC_MOODS, REVIEW_CHECKS, sceneImagePrompt, VIDEO_CAPTION_STYLES, VIDEO_FORMATS, VIDEO_PLAN_MOTIONS, VIDEO_PLAN_STYLES, VIDEO_TRANSITIONS, VOICE_NAMES } from "@koolezt/domain";
 import type { CreativeBrief, CreativeDnaRepository, CreativeProvider, FactoryRepository, SceneImageProvider, StorageProvider, VideoCaptionStyle, VideoPlan, VideoPlanInput, VideoPlanMotion, VideoPlanScene, VideoPlanStyle, VideoTransition, VoiceProvider, WinnerJob, WinnerJobRepository, WinnerVideo, WinnerVideoBatch, WinnerVideoRepository } from "@koolezt/domain";
 
 /** The renderer the service needs; implemented by PlanVideoRenderer in @koolezt/media. */
@@ -55,11 +55,17 @@ function planExtras(raw: Raw): Partial<VideoPlan> {
   const voice = oneOf(VOICE_NAMES, typeof raw.voice === "string" ? raw.voice.toLowerCase() : raw.voice);
   const voiceStyle = text(raw.voiceStyle, 200);
   const review = asRaw(raw.review);
-  const score = Number(review.score);
+  const checkValues = asRaw(review.checks);
+  const checks = Object.fromEntries(REVIEW_CHECKS.flatMap((check) => {
+    const value = text(checkValues[check], 20).toUpperCase();
+    return ["STRONG", "OK", "WEAK", "VERIFIED", "FIXED"].includes(value) ? [[check, value]] : [];
+  }));
+  const changed = text(review.changed, 300);
+  const watchOut = text(review.watchOut, 300);
   return {
     ...(angle ? { angle } : {}), ...(format ? { format } : {}), ...(hookType ? { hookType } : {}), ...(captionStyle ? { captionStyle } : {}),
     ...(musicMood ? { musicMood } : {}), ...(voice ? { voice } : {}), ...(voiceStyle ? { voiceStyle } : {}),
-    ...(Number.isFinite(score) && score >= 1 && score <= 10 ? { review: { score: Math.round(score * 10) / 10, notes: text(review.notes, 400) } } : {})
+    ...(Object.keys(checks).length || changed || watchOut ? { review: { checks, changed, watchOut } } : {})
   };
 }
 

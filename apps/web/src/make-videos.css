@@ -94,3 +94,9 @@
 .brief-angle small{font-size:12px}
 .brief-hooks{list-style:none;padding:0!important;display:grid;gap:4px}
 .plan-tile-open small{font-size:11px}
+.plan-review{display:grid;gap:4px}
+.review-checks{display:flex;flex-wrap:wrap;gap:4px}
+.review-check{padding:1px 8px;border-radius:999px;font-size:12px;background:#fff;color:#34495f;border:1px solid #cfe3d6}
+.review-check.strong,.review-check.verified{color:#1f5f3a;border-color:#9fcdb0}
+.review-check.weak{color:#8a2c1f;border-color:#e3b4ad;background:#fff6f4}
+.review-check.fixed{color:#7a4510;border-color:#e6c49a}

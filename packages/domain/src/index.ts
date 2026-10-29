@@ -400,9 +400,13 @@ export interface SceneImageProvider {
 export type VideoPlan = Readonly<{
   title: string; keepsFromWinner: string; changes: string; hookText: string; voiceover: string; scenes: readonly VideoPlanScene[]; ctaText: string; style?: VideoPlanStyle;
   format?: VideoFormat; angle?: string; hookType?: HookType; captionStyle?: VideoCaptionStyle; musicMood?: MusicMood; voice?: string; voiceStyle?: string;
-  /** The critic's verdict after reviewing (and possibly rewriting) the script. */
-  review?: Readonly<{ score: number; notes: string }>;
+  /** The critic's checklist after reviewing (and possibly rewriting) the script. No score: a self-graded number was not meaningful. */
+  review?: VideoPlanReview;
 }>;
+export const REVIEW_CHECKS = ["hook", "story", "shots", "callToAction", "claims"] as const;
+export type ReviewCheck = (typeof REVIEW_CHECKS)[number];
+/** STRONG, OK or WEAK per check; claims is VERIFIED when every claim matches the product facts, FIXED when the critic removed some. */
+export type VideoPlanReview = Readonly<{ checks: Readonly<Partial<Record<ReviewCheck, string>>>; changed: string; watchOut: string }>;
 /** WRITING_BRIEF -> BRIEF_READY (owner picks angles) -> WRITING (scripts + review) -> READY. */
 export type WinnerVideoBatchStatus = "WRITING_BRIEF" | "BRIEF_READY" | "WRITING" | "READY" | "FAILED";
 export type WinnerVideoBatch = Readonly<{

@@ -13,6 +13,9 @@ const hookLabel: Record<string, string> = { QUESTION: "Question", POV: "POV", ST
 const captionLabel: Record<string, string> = { CLASSIC: "Classic box", BOLD_POP: "Big words pop in", REVIEW: "Review bubble", TITLE_CARD: "Orange title band" };
 const musicLabel: Record<string, string> = { NONE: "No music", UPBEAT: "Upbeat", WARM: "Warm", EMOTIONAL: "Emotional", CALM: "Calm" };
 const transitionLabel: Record<string, string> = { CUT: "Hard cut", FADE: "Fade", WHIP: "Whip", ZOOM: "Zoom punch" };
+const checkLabel: Record<string, string> = { hook: "Hook", story: "Story", shots: "Shots", callToAction: "Call to action", claims: "Claims" };
+const verdictLabel: Record<string, string> = { STRONG: "Strong", OK: "OK", WEAK: "Weak", VERIFIED: "Checked", FIXED: "Fixed" };
+const verdictMark: Record<string, string> = { STRONG: "✓", OK: "•", WEAK: "!", VERIFIED: "✓", FIXED: "✎" };
 const VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "marin", "nova", "onyx", "sage", "shimmer", "verse", "cedar"];
 const seconds = (ms: number) => `${Math.round(ms / 100) / 10}s`;
 const options = (labels: Record<string, string>) => Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>);
@@ -105,7 +108,11 @@ function PlanCard({ video, selected, working, onToggle, onEdit, onSceneImages }:
         {plan.voice && <span className="plan-chip">Voice: {plan.voice}</span>}
       </div>
     </header>
-    {plan.review && <p className="plan-review"><b>Critic score {plan.review.score}/10.</b> {plan.review.notes}</p>}
+    {plan.review?.checks && <div className="plan-review">
+      <div className="review-checks">{Object.entries(checkLabel).flatMap(([key, label]) => plan.review.checks[key] ? [<span key={key} className={`review-check ${plan.review.checks[key].toLowerCase()}`}>{verdictMark[plan.review.checks[key]] ?? ""} {label}: {verdictLabel[plan.review.checks[key]] ?? plan.review.checks[key]}</span>] : [])}</div>
+      {plan.review.changed && plan.review.changed !== "Nothing" && <small><b>Critic changed:</b> {plan.review.changed}</small>}
+      {plan.review.watchOut && <small><b>Watch out:</b> {plan.review.watchOut}</small>}
+    </div>}
     {video.status === "READY" && video.outputAssetId && <div className="plan-video"><video controls preload="metadata" src={`/api/assets/${video.outputAssetId}`} /><a className="button primary" href={`/api/videos/${video.id}/download`}>Download MP4</a></div>}
     {video.status === "PLANNED" && video.outputAssetId && <div className="plan-video"><small className="muted">Video from before your edits (make it again to update):</small><video controls preload="metadata" src={`/api/assets/${video.outputAssetId}`} /></div>}
     {video.status === "FAILED" && video.failureMessage && <p className="error small">{video.failureMessage}</p>}
@@ -164,7 +171,7 @@ function PlanTile({ video, open, selected, onOpen, onToggle }: Readonly<{ video:
         ? <video src={`/api/assets/${video.outputAssetId}#t=0.5`} preload="metadata" muted playsInline />
         : still ? <img src={`/api/assets/${still}`} alt="" /> : null}</div>
       <b>{video.ordinal}. {video.plan.title}</b>
-      {video.plan.format && <small className="muted">{formatLabel[video.plan.format] ?? video.plan.format}{video.plan.review ? ` · ${video.plan.review.score}/10` : ""}</small>}
+      {video.plan.format && <small className="muted">{formatLabel[video.plan.format] ?? video.plan.format}{video.plan.review?.checks?.hook ? ` · hook ${(verdictLabel[video.plan.review.checks.hook] ?? video.plan.review.checks.hook).toLowerCase()}` : ""}</small>}
       <span className={`plan-status ${makingImages(video) ? "rendering" : video.status.toLowerCase()}`}>{makingImages(video) ? "Making AI images…" : statusLabel[video.status] ?? video.status}</span>
     </button>
     {selectable && <label className="plan-select"><input type="checkbox" checked={selected} onChange={onToggle} /> Make</label>}
@@ -228,7 +235,7 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
         <div className="plan-batch-header"><b>{batch.requestedCount} plans · {batch.targetDurationMs / 1000}s</b><span className="muted small">{new Date(batch.createdAt).toLocaleString()}</span></div>
         {batch.status === "WRITING_BRIEF" && <p className="muted">Claude is studying the winner and writing the creative brief. This takes about 1–2 minutes and refreshes automatically.</p>}
         {batch.status === "BRIEF_READY" && <BriefReview batch={batch} working={working} onApprove={(angleIds) => void run(() => api(`/api/video-batches/${batch.id}/approve-brief`, "POST", { angleIds }), "Could not start the scripts.")} onDiscard={() => void run(() => api(`/api/video-batches/${batch.id}/discard-brief`, "POST", {}), "Could not discard the brief.")} />}
-        {batch.status === "WRITING" && <p className="muted">Step 2 of 2 · Claude is writing {batch.requestedCount} shot-by-shot scripts, then a critic reviews and improves them. This takes about 3–5 minutes and refreshes automatically.</p>}
+        {batch.status === "WRITING" && <p className="muted">Step 2 of 2 · Claude is writing {batch.requestedCount} shot-by-shot scripts, then a critic checks each one (hook, story, shots, call to action, claims) and fixes weak parts. This takes about 3–5 minutes and refreshes automatically.</p>}
         {batch.status === "FAILED" && (batch.failureMessage === "Discarded by the owner." ? <p className="muted small">Brief discarded.</p> : <p className="error">Writing these plans failed: {batch.failureMessage ?? "unknown error"}. Start a new set to try again.</p>)}
         {batch.status === "READY" && <>
           <div className="plan-tiles">{videos.map((video: any) => <PlanTile key={video.id} video={video} open={open === video.id} selected={selected.includes(video.id)} onOpen={() => { setOpen(video.id); setEditing(""); }} onToggle={() => toggle(video.id)} />)}</div>
