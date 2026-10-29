@@ -19,8 +19,7 @@ try {
     console.log("scenes:", row.plan.scenes.map((scene) => `${scene.durationMs}ms ${scene.transition ?? "-"} ${scene.motion}${scene.sceneImageAssetId ? " AI" : ""}`).join(" | "));
     console.log(execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=codec_type,duration,nb_frames,r_frame_rate", "-of", "csv=p=0", file]).toString().trim());
     const scan = spawnSync("ffmpeg", ["-hide_banner", "-nostats", "-i", file, "-vf", "freezedetect=n=0.001:d=1", "-map", "0:v", "-f", "null", "-"], { encoding: "utf8" });
-    const freezes = scan.stderr.split("
-").filter((line) => line.includes("freeze_")).map((line) => line.replace(/^.*lavfi\./, "").trim());
+    const freezes = scan.stderr.split(/\r?\n/).filter((line) => line.includes("freeze_")).map((line) => line.replace(/^.*lavfi\./, "").trim());
     console.log(freezes.length ? `frozen: ${freezes.join(", ")}` : "frozen: none");
   }
 } finally {
