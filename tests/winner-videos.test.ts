@@ -364,4 +364,29 @@ describe("winner to videos", () => {
       await expect(setup.service.saveAdCopy(video!.id, { primaryTexts: [], headlines: [] })).rejects.toMatchObject({ code: "AD_COPY_INVALID" });
     } finally { await setup.dispose(); }
   });
+
+  it("deletes one plan or a whole set with the media they created, but never while something is being made", async () => {
+    const setup = await harness();
+    try {
+      await setup.dnaService.requestAnalysis(setup.reference.id, crypto.randomUUID());
+      await setup.drain();
+      const batch = await setup.service.requestPlans({ referenceId: setup.reference.id, count: 3, durationSeconds: 15, actor: "owner" });
+      await setup.drain();
+      const [first, second] = await setup.videos.listVideos(batch.id);
+      await setup.service.makeVideos(batch.id, [first!.id]);
+      await expect(setup.service.deleteVideo(first!.id)).rejects.toMatchObject({ code: "VIDEO_BUSY" });
+      await expect(setup.service.deleteBatch(batch.id)).rejects.toMatchObject({ code: "VIDEO_BUSY" });
+      await setup.drain();
+      const made = await setup.videos.getVideo(first!.id);
+      await setup.service.deleteVideo(first!.id);
+      expect((await setup.videos.listVideos(batch.id)).map((video) => video.id)).not.toContain(first!.id);
+      expect(setup.videos.discardedMedia).toContain(made.outputAssetId);
+      await setup.service.deleteBatch(batch.id);
+      await expect(setup.videos.getBatch(batch.id)).rejects.toMatchObject({ code: "VIDEO_BATCH_NOT_FOUND" });
+      await expect(setup.videos.getVideo(second!.id)).rejects.toMatchObject({ code: "VIDEO_NOT_FOUND" });
+      // Product photos are never touched.
+      expect(setup.videos.discardedMedia).not.toContain(setup.photo.id);
+      expect((await setup.repository.getProduct(setup.product.id)).assets.map((asset) => asset.id)).toContain(setup.photo.id);
+    } finally { await setup.dispose(); }
+  });
 });

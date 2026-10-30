@@ -321,6 +321,35 @@ export class WinnerVideoService {
     return edited;
   }
 
+  /** Every media file a plan created: the made video, AI scene images and uploaded clips (never product photos). */
+  private ownedMedia(video: WinnerVideo): string[] {
+    return [...new Set([
+      ...(video.outputAssetId ? [video.outputAssetId] : []),
+      ...video.plan.scenes.flatMap((scene) => [scene.sceneImageAssetId, scene.sceneVideoAssetId].filter((id): id is string => Boolean(id))),
+      ...(video.plan.uploadedClipIds ?? [])
+    ])];
+  }
+
+  private assertIdle(videos: readonly WinnerVideo[]) {
+    if (videos.some((video) => video.status === "QUEUED" || video.status === "RENDERING" || generating(video))) throw new DomainError("VIDEO_BUSY", "A video or AI image here is still being made. Delete it after it finishes.");
+  }
+
+  /** Deletes one plan with its made video, AI images and clips. */
+  async deleteVideo(videoId: string): Promise<void> {
+    const video = await this.d.videos.getVideo(videoId);
+    this.assertIdle([video]);
+    await this.d.videos.remove({ videoIds: [video.id], mediaAssetIds: this.ownedMedia(video) });
+  }
+
+  /** Deletes a whole set of plans (or a brief) with everything its plans created. */
+  async deleteBatch(batchId: string): Promise<void> {
+    const batch = await this.d.videos.getBatch(batchId);
+    if (batch.status === "WRITING" || batch.status === "WRITING_BRIEF") throw new DomainError("VIDEO_PLANS_IN_PROGRESS", "Claude is still writing this set. Delete it after it finishes.");
+    const videos = await this.d.videos.listVideos(batch.id);
+    this.assertIdle(videos);
+    await this.d.videos.remove({ batchId: batch.id, videoIds: videos.map((video) => video.id), mediaAssetIds: videos.flatMap((video) => this.ownedMedia(video)) });
+  }
+
   /** Writes (or rewrites) the Meta ad copy for one plan. It does not change the video, so a made video stays ready. */
   async writeAdCopy(videoId: string): Promise<WinnerVideo> {
     if (!this.d.provider.writeAdCopy) throw new DomainError("AD_COPY_UNAVAILABLE", "The AI provider cannot write ad copy.");

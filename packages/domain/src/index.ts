@@ -437,6 +437,8 @@ export interface WinnerVideoRepository {
   updateVideo(video: WinnerVideo): Promise<void>;
   getVideo(id: string): Promise<WinnerVideo>;
   listVideos(batchId?: string): Promise<readonly WinnerVideo[]>;
+  /** Deletes plans (and the set when batchId is given) with their waiting jobs, and marks their media files for cleanup. */
+  remove(input: Readonly<{ batchId?: string; videoIds: readonly string[]; mediaAssetIds: readonly string[] }>): Promise<void>;
 }
 export type VideoPlanInput = Readonly<{
   requestedCount: 3 | 6 | 12; targetDurationMs: number; style: VideoPlanStyle;

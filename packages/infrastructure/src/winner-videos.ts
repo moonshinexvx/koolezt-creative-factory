@@ -69,6 +69,24 @@ export class PostgresWinnerVideoStore implements WinnerVideoRepository {
   async updateVideo(v: WinnerVideo): Promise<void> {
     await this.pool.query("UPDATE winner_videos SET status=$2,output_asset_id=$3,duration_ms=$4,failure_message=$5,updated_at=$6,plan=$7::jsonb WHERE id=$1", [v.id, v.status, v.outputAssetId ?? null, v.durationMs ?? null, v.failureMessage?.slice(0, 500) ?? null, v.updatedAt, JSON.stringify(v.plan)]);
   }
+  async remove(input: Parameters<WinnerVideoRepository["remove"]>[0]): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const targets = [...input.videoIds, ...(input.batchId ? [input.batchId] : [])];
+      await client.query("DELETE FROM winner_jobs WHERE target_id = ANY($1::uuid[]) AND status <> 'RUNNING'", [targets]);
+      await client.query("DELETE FROM winner_videos WHERE id = ANY($1::uuid[])", [input.videoIds]);
+      if (input.batchId) await client.query("DELETE FROM winner_video_batches WHERE id=$1", [input.batchId]);
+      // The hourly media cleanup deletes the S3 objects once they are due.
+      if (input.mediaAssetIds.length) await client.query("UPDATE media_assets SET delete_after=now(), updated_at=now() WHERE id = ANY($1::uuid[]) AND storage_provider='s3' AND lifecycle_status IN ('PENDING_UPLOAD','FAILED','AVAILABLE')", [input.mediaAssetIds]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
   async getVideo(id: string): Promise<WinnerVideo> {
     const q = await this.pool.query("SELECT * FROM winner_videos WHERE id=$1", [id]);
     if (!q.rows[0]) throw new DomainError("VIDEO_NOT_FOUND", "This video was not found.");
@@ -118,4 +136,10 @@ export class InMemoryWinnerVideoStore implements WinnerVideoRepository {
   async updateVideo(v: WinnerVideo) { this.videos.set(v.id, structuredClone(v)); }
   async getVideo(id: string) { const v = this.videos.get(id); if (!v) throw new DomainError("VIDEO_NOT_FOUND", "This video was not found."); return structuredClone(v); }
   async listVideos(batchId?: string) { return [...this.videos.values()].filter((v) => !batchId || v.batchId === batchId).sort((a, b) => a.ordinal - b.ordinal).map((v) => structuredClone(v)); }
+  readonly discardedMedia: string[] = [];
+  async remove(input: Parameters<WinnerVideoRepository["remove"]>[0]) {
+    for (const id of input.videoIds) this.videos.delete(id);
+    if (input.batchId) this.batches.delete(input.batchId);
+    this.discardedMedia.push(...input.mediaAssetIds);
+  }
 }
