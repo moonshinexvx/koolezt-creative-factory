@@ -47,6 +47,7 @@ export { assembleCreativeConcept, bindCanonicalVisualReferences, boundedConceptP
 export { CreativeDnaService, canonicalizeCreativeDna, selectedWinnerDnaSnapshot } from "./creative-dna.js";
 export { isMetaVideoUrl, MetaWinnerService, performanceFromMeta } from "./meta-winners.js";
 export { canonicalizeVideoPlan, WinnerJobRunner, WinnerVideoService } from "./winner-videos.js";
+export { factsFrom, htmlToText, StoreProductImporter } from "./store-import.js";
 export type { JobOutcome, VideoRenderer } from "./winner-videos.js";
 export type { MetaImportResult } from "./meta-winners.js";
 export { assertExecutionFeasible, buildExecutionFeasibilityPlan } from "./execution-feasibility.js";

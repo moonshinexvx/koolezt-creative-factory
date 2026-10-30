@@ -35,6 +35,7 @@ export function ProductsPage({ sidebar, products, onChanged }: Readonly<{ sideba
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [importUrl, setImportUrl] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
   const selected = creating ? undefined : products.find((product) => product.id === selectedId);
   const open = (product: any) => { setCreating(false); setSelectedId(product.id); setDraft(draftFrom(product)); setError(""); setNotice(""); };
@@ -49,6 +50,13 @@ export function ProductsPage({ sidebar, products, onChanged }: Readonly<{ sideba
     await onChanged();
     setNotice("Saved.");
   }, "Could not save the product.");
+  // Reads the product's public data from the store link: name, description, facts and photos.
+  const importFromStore = () => run(async () => {
+    const result = await api("/api/products/import", "POST", { url: importUrl });
+    await onChanged();
+    setCreating(false); setSelectedId(result.product.id); setDraft(draftFrom(result.product)); setImportUrl("");
+    setNotice(result.created ? `Imported "${result.product.name}" with ${result.photosAdded} photos. Check the facts below, remove any you don't want ads to say, then save.` : `Already here: added ${result.photosAdded} new photo${result.photosAdded === 1 ? "" : "s"}; your edits were kept.`);
+  }, "Could not import this product.");
   const uploadPhotos = (files: FileList | null) => run(async () => {
     if (!selected || !files?.length) return;
     for (const file of Array.from(files)) {
@@ -67,6 +75,10 @@ export function ProductsPage({ sidebar, products, onChanged }: Readonly<{ sideba
 
   const list = <aside className="project-browser winner-library">
     <div className="project-browser-header"><h2>Products</h2><button className="primary" onClick={() => { setCreating(true); setDraft(emptyDraft); setError(""); setNotice(""); }}>+ Add product</button></div>
+    <div className="store-import">
+      <input type="url" placeholder="Paste a koolezt.com product link" value={importUrl} onChange={(event) => setImportUrl(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && importUrl.trim()) void importFromStore(); }} />
+      <button disabled={working || !importUrl.trim()} onClick={() => void importFromStore()}>{working && importUrl ? "Importing…" : "Import from store"}</button>
+    </div>
     <div className="winner-list">{products.map((product) => <button key={product.id} className={`winner-card ${!creating && selected?.id === product.id ? "active" : ""}`} onClick={() => open(product)}><b>{product.name}</b><span>{product.assets.filter((asset: any) => asset.kind === "IMAGE").length} photos · {product.claims.length} facts</span></button>)}
       {products.length === 0 && <p className="empty">No products yet.</p>}</div>
   </aside>;

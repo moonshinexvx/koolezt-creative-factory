@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { CompositionProviderRegistry, CreativeDnaService, CreativeFactoryService, CreativeStrategyService, isMetaVideoUrl, MetaWinnerService, VideoProviderRegistry, WinnerJobRunner, WinnerVideoService } from "@koolezt/application";
+import { CompositionProviderRegistry, CreativeDnaService, CreativeFactoryService, CreativeStrategyService, isMetaVideoUrl, MetaWinnerService, StoreProductImporter, VideoProviderRegistry, WinnerJobRunner, WinnerVideoService } from "@koolezt/application";
 import { DomainError } from "@koolezt/domain";
 import { DesktopCompositionProvider, PostgresCreativeDnaStore, PostgresWinnerJobStore, PostgresWinnerVideoStore, PostgresCreativeStrategyStore, PostgresDesktopRenderJobStore, PostgresDurableMediaAssetCatalog, PostgresExternalMediaStagingStore, PostgresFactoryRepository, PostgresMediaAssetCatalog, PostgresRenderWorkerIdentityStore, PostgresProjectArchiveStore, PostgresVariantCreativePackageStore, PostgresVariantFactoryStore, createPostgresPool } from "@koolezt/infrastructure";
 import { CloudflareAccessVerifier } from "./browser-auth.js";
@@ -174,7 +174,10 @@ export function createRuntime(env = process.env) {
     voiceProfileId: env.OPENAI_VOICE_NAME ?? "marin", maxLoadAverage: Number(env.VIDEO_RENDER_MAX_LOAD ?? "2.5"),
     ...(env.OPENAI_API_KEY ? { sceneImages: new OpenAISceneImageProvider({ apiKey: env.OPENAI_API_KEY, model: env.OPENAI_IMAGE_MODEL ?? "gpt-image-2", quality: env.OPENAI_IMAGE_QUALITY ?? "medium", size: env.OPENAI_IMAGE_SIZE ?? "1024x1536" }) } : {}) });
   const winnerJobRunner = new WinnerJobRunner({ jobs: winnerJobs, handlers: { ANALYZE_WINNER: (job) => creativeDnaService.runJob(job), WRITE_CREATIVE_BRIEF: (job) => winnerVideos.writeBrief(job), WRITE_VIDEO_PLANS: (job) => winnerVideos.writePlans(job), RENDER_VIDEO: (job) => winnerVideos.renderVideo(job), GENERATE_SCENE_IMAGES: (job) => winnerVideos.generateSceneImages(job) } });
+  // Product import reads only the owner's own store (public Shopify product data); other hosts are refused.
+  const storeImporter = new StoreProductImporter({ catalog: service, storage, allowedHosts: (env.PRODUCT_IMPORT_HOSTS ?? "www.koolezt.com,koolezt.com").split(",").map((host) => host.trim()).filter(Boolean) });
   return {
+    storeImporter,
     metaWinners,
     winnerJobs,
     winnerVideoStore,

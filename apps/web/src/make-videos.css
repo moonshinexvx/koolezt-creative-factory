@@ -111,3 +111,6 @@
 .copy-small{padding:2px 8px;font-size:12px;flex:none}
 .ad-copy label{display:grid;gap:4px;font-size:13px;color:#34495f}
 .ad-copy textarea,.ad-copy input,.ad-copy select{padding:6px 8px;border:1px solid #b7c2d1;border-radius:6px;font:inherit;width:100%;box-sizing:border-box}
+.store-import{display:grid;grid-template-columns:1fr auto;gap:6px}
+.store-import input{min-width:0;padding:7px 8px;border:1px solid #b7c2d1;border-radius:6px;font:inherit;font-size:13px}
+.store-import button{font-size:13px;padding:6px 10px}
