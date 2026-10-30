@@ -70,7 +70,7 @@ export function ProductsPage({ sidebar, products, onChanged }: Readonly<{ sideba
     await onChanged();
   }, "Could not upload the photos.");
   const updateAssets = (assets: readonly any[]) => run(async () => { await api(`/api/products/${selected.id}`, "PUT", productBody(draftFrom(selected), selected, assets)); await onChanged(); }, "Could not update the photos.");
-  const field = (key: keyof Draft, label: string, rows = 0, hint = "") => <label>{label}{hint && <small className="muted">{hint}</small>}{rows ? <textarea rows={rows} value={draft[key]} onChange={(event) => setDraft({ ...draft, [key]: event.target.value })} /> : <input value={draft[key]} onChange={(event) => setDraft({ ...draft, [key]: event.target.value })} />}</label>;
+  const field = (key: keyof Draft, label: string, rows = 0, hint = "") => <label>{label}{hint && <small className="muted">{hint}</small>}{rows ? <textarea rows={Math.min(24, Math.max(rows, draft[key].split("\n").length + 1, Math.ceil(draft[key].length / 90) + 1))} value={draft[key]} onChange={(event) => setDraft({ ...draft, [key]: event.target.value })} /> : <input value={draft[key]} onChange={(event) => setDraft({ ...draft, [key]: event.target.value })} />}</label>;
   const photos = (selected?.assets ?? []).filter((asset: any) => asset.kind === "IMAGE");
 
   const list = <aside className="project-browser winner-library">
@@ -89,7 +89,7 @@ export function ProductsPage({ sidebar, products, onChanged }: Readonly<{ sideba
     <section className="card product-form"><h2>{selected ? selected.name : "Add a product"}</h2>
       <p className="muted">The AI only uses what you write here: facts are the only claims new videos may make, and the photos are the only images they show.</p>
       {field("name", "Product name")}
-      {field("description", "Short description", 3)}
+      {field("description", "Description", 4)}
       {field("facts", "Facts the ads may say (one per line)", 6, "Only real, checkable facts. Process notes (like shipping steps) don't belong here.")}
       {field("defaultCta", "Default call to action")}
       <h4>Product look rules (optional)</h4>

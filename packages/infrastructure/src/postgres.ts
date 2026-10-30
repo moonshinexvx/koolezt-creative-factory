@@ -248,6 +248,8 @@ export class PostgresFactoryRepository implements FactoryRepository {
           [product.id, claim.kind, claim.text, position]
         );
       }
+      // Photos the owner removed are switched off (kept as rows because old videos may reference them).
+      await client.query("UPDATE product_assets SET active = false WHERE product_id = $1 AND NOT (id = ANY($2::uuid[]))", [product.id, product.assets.map((asset) => asset.id)]);
       for (const [position, asset] of product.assets.entries()) {
         await client.query(
           `INSERT INTO product_assets (id, product_id, media_asset_id, kind, label, storage_key, mime_type, position, active)
