@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
-import { DomainError, HOOK_TYPES, MUSIC_MOODS, REVIEW_CHECKS, sceneImagePrompt, VIDEO_CAPTION_STYLES, VIDEO_FORMATS, VIDEO_PLAN_MOTIONS, VIDEO_PLAN_STYLES, VIDEO_TRANSITIONS, VOICE_NAMES } from "@koolezt/domain";
-import type { CreativeBrief, CreativeDnaRepository, CreativeProvider, FactoryRepository, SceneImageProvider, StorageProvider, VideoCaptionStyle, VideoPlan, VideoPlanInput, VideoPlanMotion, VideoPlanScene, VideoPlanStyle, VideoTransition, VoiceProvider, WinnerJob, WinnerJobRepository, WinnerVideo, WinnerVideoBatch, WinnerVideoRepository } from "@koolezt/domain";
+import { DomainError, HOOK_TYPES, META_CTA_BUTTONS, MUSIC_MOODS, REVIEW_CHECKS, sceneImagePrompt, VIDEO_CAPTION_STYLES, VIDEO_FORMATS, VIDEO_PLAN_MOTIONS, VIDEO_PLAN_STYLES, VIDEO_TRANSITIONS, VOICE_NAMES } from "@koolezt/domain";
+import type { CreativeBrief, MetaAdCopy, CreativeDnaRepository, CreativeProvider, FactoryRepository, SceneImageProvider, StorageProvider, VideoCaptionStyle, VideoPlan, VideoPlanInput, VideoPlanMotion, VideoPlanScene, VideoPlanStyle, VideoTransition, VoiceProvider, WinnerJob, WinnerJobRepository, WinnerVideo, WinnerVideoBatch, WinnerVideoRepository } from "@koolezt/domain";
 
 /** The renderer the service needs; implemented by PlanVideoRenderer in @koolezt/media. */
 export interface VideoRenderer {
@@ -45,7 +45,17 @@ function sceneExtras(scene: Raw): Partial<VideoPlanScene> {
   return { ...(imagePrompt ? { imagePrompt } : {}), ...(videoPrompt ? { videoPrompt } : {}), ...(shotType ? { shotType } : {}), ...(voiceLine ? { voiceLine } : {}), ...(transition ? { transition } : {}) };
 }
 
-/** Optional creative fields of a plan (format, angle, hook type, caption style, music, voice, review). */
+/** Keeps Meta's length limits: primary text 600 characters here (Meta truncates after ~125 on screen), headline 40, description 30. */
+export function canonicalizeAdCopy(value: unknown): MetaAdCopy | undefined {
+  const raw = asRaw(value);
+  const lines = (item: unknown, max: number) => typeof item === "string" ? item.replace(/\r/g, "").replace(/\\n/g, "\n").split("\n").map((line) => line.replace(/[ \t]+/g, " ").trim()).join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, max) : "";
+  const primaryTexts = (Array.isArray(raw.primaryTexts) ? raw.primaryTexts : []).map((item) => lines(item, 600)).filter(Boolean).slice(0, 5);
+  const headlines = (Array.isArray(raw.headlines) ? raw.headlines : []).map((item) => text(item, 40)).filter(Boolean).slice(0, 5);
+  if (!primaryTexts.length || !headlines.length) return undefined;
+  return { primaryTexts, headlines, description: text(raw.description, 30), callToAction: oneOf(META_CTA_BUTTONS, raw.callToAction) ?? "SHOP_NOW" };
+}
+
+/** Optional creative fields of a plan (format, angle, hook type, caption style, music, voice, review, ad copy). */
 function planExtras(raw: Raw): Partial<VideoPlan> {
   const angle = text(raw.angle, 120);
   const format = oneOf(VIDEO_FORMATS, raw.format);
@@ -62,10 +72,12 @@ function planExtras(raw: Raw): Partial<VideoPlan> {
   }));
   const changed = text(review.changed, 300);
   const watchOut = text(review.watchOut, 300);
+  const adCopy = canonicalizeAdCopy(raw.adCopy);
   return {
     ...(angle ? { angle } : {}), ...(format ? { format } : {}), ...(hookType ? { hookType } : {}), ...(captionStyle ? { captionStyle } : {}),
     ...(musicMood ? { musicMood } : {}), ...(voice ? { voice } : {}), ...(voiceStyle ? { voiceStyle } : {}),
-    ...(Object.keys(checks).length || changed || watchOut ? { review: { checks, changed, watchOut } } : {})
+    ...(Object.keys(checks).length || changed || watchOut ? { review: { checks, changed, watchOut } } : {}),
+    ...(adCopy ? { adCopy } : {})
   };
 }
 
@@ -303,9 +315,36 @@ export class WinnerVideoService {
       const scene = sceneVideoAssetId && clips.has(sceneVideoAssetId) ? edited : rest;
       return scene.sceneImageAssetId && known.has(scene.sceneImageAssetId) ? { ...plainScene(scene), sceneImageAssetId: scene.sceneImageAssetId, imageStatus: "READY" as const } : plainScene(scene);
     });
-    const edited: WinnerVideo = { ...rest, plan: { ...plan, scenes, ...(video.plan.uploadedClipIds ? { uploadedClipIds: video.plan.uploadedClipIds } : {}) }, status: "PLANNED", updatedAt: this.now() };
+    const adCopy = plan.adCopy ?? video.plan.adCopy;
+    const edited: WinnerVideo = { ...rest, plan: { ...plan, scenes, ...(adCopy ? { adCopy } : {}), ...(video.plan.uploadedClipIds ? { uploadedClipIds: video.plan.uploadedClipIds } : {}) }, status: "PLANNED", updatedAt: this.now() };
     await this.d.videos.updateVideo(edited);
     return edited;
+  }
+
+  /** Writes (or rewrites) the Meta ad copy for one plan. It does not change the video, so a made video stays ready. */
+  async writeAdCopy(videoId: string): Promise<WinnerVideo> {
+    if (!this.d.provider.writeAdCopy) throw new DomainError("AD_COPY_UNAVAILABLE", "The AI provider cannot write ad copy.");
+    const video = await this.d.videos.getVideo(videoId);
+    const batch = await this.d.videos.getBatch(video.batchId);
+    const { input } = await this.planInput(batch);
+    const { photos: _photos, ...rest } = input;
+    void _photos;
+    const { plan } = video;
+    const script = { title: plan.title, angle: plan.angle, format: plan.format, hookType: plan.hookType, hookText: plan.hookText, voiceover: plan.voiceover, ctaText: plan.ctaText, scenes: plan.scenes.map((scene) => ({ caption: scene.caption, shotType: scene.shotType, voiceLine: scene.voiceLine })) };
+    const { adCopy } = await this.d.provider.writeAdCopy({ ...rest, plan: script }, { operationKey: `ad-copy:${video.id}:${randomUUID()}`, projectId: batch.productId, targetId: video.id });
+    const canonical = canonicalizeAdCopy(adCopy);
+    if (!canonical) throw new DomainError("AD_COPY_INVALID", "The AI did not return usable ad copy. Try again.");
+    return this.saveAdCopy(videoId, canonical);
+  }
+
+  /** Saves edited ad copy without touching the video itself. */
+  async saveAdCopy(videoId: string, value: unknown): Promise<WinnerVideo> {
+    const adCopy = canonicalizeAdCopy(value);
+    if (!adCopy) throw new DomainError("AD_COPY_INVALID", "Ad copy needs at least one primary text and one headline.");
+    const latest = await this.d.videos.getVideo(videoId);
+    const updated: WinnerVideo = { ...latest, plan: { ...latest.plan, adCopy }, updatedAt: this.now() };
+    await this.d.videos.updateVideo(updated);
+    return updated;
   }
 
   /** Stores a clip the owner made elsewhere (for example in the Kling app) so a scene can use it; the editor then picks the scene and start time. */

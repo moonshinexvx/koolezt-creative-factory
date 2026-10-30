@@ -404,9 +404,15 @@ export type VideoPlan = Readonly<{
   format?: VideoFormat; angle?: string; hookType?: HookType; captionStyle?: VideoCaptionStyle; musicMood?: MusicMood; voice?: string; voiceStyle?: string;
   /** The critic's checklist after reviewing (and possibly rewriting) the script. No score: a self-graded number was not meaningful. */
   review?: VideoPlanReview;
+  adCopy?: MetaAdCopy;
   /** Clips uploaded for this plan; only these may be set as a scene video. Maintained by the server. */
   uploadedClipIds?: readonly string[];
 }>;
+/** Meta call-to-action buttons the ad copy may choose. */
+export const META_CTA_BUTTONS = ["SHOP_NOW", "ORDER_NOW", "LEARN_MORE", "GET_OFFER", "BUY_NOW", "SEE_MORE", "CUSTOMIZE"] as const;
+export type MetaCtaButton = (typeof META_CTA_BUTTONS)[number];
+/** Copy for the Meta ad that runs this video: up to 3 primary texts and headlines (Meta rotates them), a description and the button. */
+export type MetaAdCopy = Readonly<{ primaryTexts: readonly string[]; headlines: readonly string[]; description: string; callToAction: MetaCtaButton }>;
 export const REVIEW_CHECKS = ["hook", "story", "shots", "callToAction", "claims"] as const;
 export type ReviewCheck = (typeof REVIEW_CHECKS)[number];
 /** STRONG, OK or WEAK per check; claims is VERIFIED when every claim matches the product facts, FIXED when the critic removed some. */
@@ -1033,6 +1039,8 @@ export interface CreativeProvider {
   writeCreativeBrief?(input: VideoPlanInput, context: ProviderOperationContext): Promise<Readonly<{ brief: unknown; submission: ProviderSubmission }>>;
   /** Critic step: scores each script and rewrites weak ones; returns the full set. */
   reviewVideoPlans?(input: VideoPlanInput & Readonly<{ plans: readonly unknown[] }>, context: ProviderOperationContext): Promise<Readonly<{ plans: readonly unknown[]; submission: ProviderSubmission }>>;
+  /** Meta ad copy for one finished plan (photos are not needed). */
+  writeAdCopy?(input: Omit<VideoPlanInput, "photos"> & Readonly<{ plan: unknown }>, context: ProviderOperationContext): Promise<Readonly<{ adCopy: unknown; submission: ProviderSubmission }>>;
   /** Explicit historical-ad analysis. Submission returns a durable background response ID. */
   submitCreativeDnaAnalysis?(input: CreativeDnaAnalysisInput, context: ProviderOperationContext): Promise<CreativeDnaProviderResponse>;
   /** Retrieves only the known response and must never create a replacement request. */

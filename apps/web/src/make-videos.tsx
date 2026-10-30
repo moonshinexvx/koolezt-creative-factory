@@ -112,7 +112,48 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
   </article>;
 }
 
-function PlanCard({ video, selected, working, onToggle, onEdit, onSceneImages }: Readonly<{ video: any; selected: boolean; working: boolean; onToggle: () => void; onEdit: () => void; onSceneImages: (scenes?: number[]) => void }>) {
+const ctaLabel: Record<string, string> = { SHOP_NOW: "Shop now", ORDER_NOW: "Order now", LEARN_MORE: "Learn more", GET_OFFER: "Get offer", BUY_NOW: "Buy now", SEE_MORE: "See more", CUSTOMIZE: "Customize" };
+
+function CopyText({ text }: Readonly<{ text: string }>) {
+  const [copied, setCopied] = useState(false);
+  return <button type="button" className="copy-small" onClick={() => void navigator.clipboard.writeText(text).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button>;
+}
+
+/** Meta ad copy for the plan: Claude writes it, the owner copies or edits it. It never changes the video itself. */
+function AdCopy({ video, working, onWrite, onSave }: Readonly<{ video: any; working: boolean; onWrite: () => void; onSave: (copy: unknown) => void }>) {
+  const copy = video.plan.adCopy;
+  const [draft, setDraft] = useState<any>();
+  if (draft) {
+    const set = (field: string, value: unknown) => setDraft((current: any) => ({ ...current, [field]: value }));
+    const setItem = (field: "primaryTexts" | "headlines", index: number, value: string) => set(field, draft[field].map((item: string, at: number) => at === index ? value : item));
+    return <section className="ad-copy">
+      <h4>Meta ad copy</h4>
+      {draft.primaryTexts.map((item: string, index: number) => <label key={`p${index}`}>Primary text {index + 1}<textarea rows={4} value={item} onChange={(event) => setItem("primaryTexts", index, event.target.value)} /></label>)}
+      {draft.headlines.map((item: string, index: number) => <label key={`h${index}`}>Headline {index + 1} <small className="muted">({item.length}/40)</small><input value={item} maxLength={40} onChange={(event) => setItem("headlines", index, event.target.value)} /></label>)}
+      <div className="scene-row">
+        <label>Description <small className="muted">({draft.description.length}/30)</small><input value={draft.description} maxLength={30} onChange={(event) => set("description", event.target.value)} /></label>
+        <label>Button<select value={draft.callToAction} onChange={(event) => set("callToAction", event.target.value)}>{options(ctaLabel)}</select></label>
+      </div>
+      <div className="scene-row"><button className="primary" disabled={working} onClick={() => { onSave(draft); setDraft(undefined); }}>Save copy</button><button type="button" onClick={() => setDraft(undefined)}>Cancel</button></div>
+    </section>;
+  }
+  return <section className="ad-copy">
+    <div className="ad-copy-header"><h4>Meta ad copy</h4><div className="scene-row">
+      {copy && <button type="button" disabled={working} onClick={() => setDraft(structuredClone(copy))}>Edit</button>}
+      <button type="button" disabled={working} onClick={onWrite}>{working ? "Writing…" : copy ? "Write again" : "Write Meta ad copy"}</button>
+    </div></div>
+    {!copy ? <p className="muted small">Claude writes 3 primary texts, 3 headlines, a description and the button for this video, matching its angle and hook. Takes about 20–40 seconds.</p> : <>
+      <b className="small">Primary text</b>
+      {copy.primaryTexts.map((item: string, index: number) => <div key={`p${index}`} className="ad-copy-item"><p>{item}</p><CopyText text={item} /></div>)}
+      <b className="small">Headlines</b>
+      {copy.headlines.map((item: string, index: number) => <div key={`h${index}`} className="ad-copy-item"><p><b>{item}</b></p><CopyText text={item} /></div>)}
+      {copy.description && <><b className="small">Description</b><div className="ad-copy-item"><p>{copy.description}</p><CopyText text={copy.description} /></div></>}
+      <p className="small"><b>Button:</b> {ctaLabel[copy.callToAction] ?? copy.callToAction}</p>
+    </>}
+  </section>;
+}
+
+function PlanCard({ video, selected, working, onToggle, onEdit, onSceneImages, onWriteAdCopy, onSaveAdCopy }: Readonly<{ video: any; selected: boolean; working: boolean; onToggle: () => void; onEdit: () => void; onWriteAdCopy: () => void; onSaveAdCopy: (copy: unknown) => void; onSceneImages: (scenes?: number[]) => void }>) {
   const plan = video.plan;
   const busyImages = makingImages(video);
   const selectable = (video.status === "PLANNED" || video.status === "FAILED") && !busyImages;
@@ -159,6 +200,7 @@ function PlanCard({ video, selected, working, onToggle, onEdit, onSceneImages }:
     {canMakeImages && <button type="button" disabled={working} onClick={() => onSceneImages()}>{aiCount ? `Make all ${plan.scenes.length} AI scene images again` : `Make AI scene images (${plan.scenes.length})`}</button>}
     {busyImages && <p className="muted small">OpenAI is making one image per scene from the product photo chosen for that scene. This takes about 1–2 minutes and refreshes automatically.</p>}
     {editable && <button type="button" onClick={onEdit}>{video.status === "READY" ? "Edit and make again" : "Edit photos and scenes"}</button>}
+    <AdCopy key={video.id} video={video} working={working} onWrite={onWriteAdCopy} onSave={onSaveAdCopy} />
   </article>;
 }
 
@@ -238,7 +280,7 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
     <div className="plan-panel-header"><span className="muted small">Plan {openEntry.video.ordinal} · {openEntry.batch.targetDurationMs / 1000}s</span><button type="button" onClick={() => { setOpen(""); setEditing(""); }}>Close</button></div>
     {editing === openEntry.video.id
       ? <PlanEditor key={openEntry.video.id} video={openEntry.video} photos={photosOf(openEntry.batch.productId)} onCancel={() => setEditing("")} onSaved={async () => { setEditing(""); await load(); }} />
-      : <PlanCard key={openEntry.video.id} video={openEntry.video} working={working} selected={selected.includes(openEntry.video.id)} onEdit={() => setEditing(openEntry.video.id)} onSceneImages={(scenes) => void run(() => api(`/api/videos/${openEntry.video.id}/scene-images`, "POST", scenes ? { scenes } : {}), "Could not start the AI scene images.")} onToggle={() => toggle(openEntry.video.id)} />}
+      : <PlanCard key={openEntry.video.id} video={openEntry.video} working={working} selected={selected.includes(openEntry.video.id)} onEdit={() => setEditing(openEntry.video.id)} onWriteAdCopy={() => void run(() => api(`/api/videos/${openEntry.video.id}/ad-copy`, "POST", {}), "Could not write the ad copy.")} onSaveAdCopy={(copy) => void run(() => api(`/api/videos/${openEntry.video.id}/ad-copy`, "PUT", copy), "Could not save the ad copy.")} onSceneImages={(scenes) => void run(() => api(`/api/videos/${openEntry.video.id}/scene-images`, "POST", scenes ? { scenes } : {}), "Could not start the AI scene images.")} onToggle={() => toggle(openEntry.video.id)} />}
   </div>;
 
   return <section className="card make-videos">

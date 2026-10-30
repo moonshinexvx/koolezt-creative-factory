@@ -122,7 +122,21 @@ The input holds an analyzed winning ad (report, the rules learned from it, measu
 ${style === "STOP_MOTION" ? STOP_MOTION_NOTE + "\n" : ""}${TRUTH_RULES}
 Respond with exactly one JSON object and nothing else: {"audience": string, "buyerInsights": string[], "angles": [{"id": string, "name": string, "insight": string, "whyItCouldWork": string}], "hooks": [{"type": string, "text": string}], "directorNotes": string}`;
 
-const SCRIPT_SHAPE = `{"plans": [{"title": string, "angle": string, "format": string, "hookType": string, "keepsFromWinner": string, "changes": string, "hookText": string, "voiceover": string, "voice": string, "voiceStyle": string, "captionStyle": string, "musicMood": string, "ctaText": string, "scenes": [{"photo": number, "shotType": string, "voiceLine": string, "caption": string, "seconds": number, "motion": string, "transition": string, "imagePrompt": string, "videoPrompt": string}]}]}`;
+const AD_COPY_RULES = `Meta ad copy that runs with the video and continues its angle and hook (the video carries the story; the copy makes people tap):
+  - primaryTexts: exactly 3 different versions: (1) short, at most 125 characters, a punchy hook line plus the call to action; (2) a short story of 2 to 4 brief lines that speaks to the buyer's feeling; (3) 3 or 4 short benefit lines that start with a fitting emoji, then the call to action. Write like a friendly small brand, not an advertiser; at most 2 emojis in versions 1 and 2. Line breaks are written as \\n.
+  - headlines: exactly 3, each at most 40 characters, each a different reason to tap.
+  - description: at most 30 characters.
+  - callToAction: one of SHOP_NOW, ORDER_NOW, LEARN_MORE, GET_OFFER, BUY_NOW, SEE_MORE, CUSTOMIZE (CUSTOMIZE or SHOP_NOW fit personalized products best).
+  - No prices, discounts, shipping promises or urgency claims unless they are in the product facts; no "you" statements about personal attributes (Meta policy), no ALL-CAPS words.`;
+const AD_COPY_SHAPE = `{"primaryTexts": [string, string, string], "headlines": [string, string, string], "description": string, "callToAction": string}`;
+
+export const AD_COPY_INSTRUCTIONS = `${DIRECTOR_ROLE}
+The input holds the product, its facts, the winning ad's analysis and one finished video script (its angle, format, hook, voiceover and scenes). Write the ${"Meta"} ad copy for that video.
+${AD_COPY_RULES}
+${TRUTH_RULES}
+Respond with exactly one JSON object and nothing else: ${AD_COPY_SHAPE}`;
+
+const SCRIPT_SHAPE = `{"plans": [{"title": string, "angle": string, "format": string, "hookType": string, "keepsFromWinner": string, "changes": string, "hookText": string, "voiceover": string, "voice": string, "voiceStyle": string, "captionStyle": string, "musicMood": string, "ctaText": string, "adCopy": ${AD_COPY_SHAPE}, "scenes": [{"photo": number, "shotType": string, "voiceLine": string, "caption": string, "seconds": number, "motion": string, "transition": string, "imagePrompt": string, "videoPrompt": string}]}]}`;
 
 export const VIDEO_SCRIPT_INSTRUCTIONS = (count: number, seconds: number, style: PlanStyle) => `${DIRECTOR_ROLE}
 The input holds the analyzed winning ad, the product, its facts, numbered product photos (photo 1 is the main photo) and the creative brief with the angles the owner approved. Write exactly ${count} complete video scripts for ${seconds}-second vertical ads, shot by shot.
@@ -139,6 +153,7 @@ Creative rules:
 - imagePrompt: one or two sentences describing a new vertical 9:16 photorealistic image for this shot: setting, people or pets if the shot needs them, props, lighting, camera angle and distance, and where the product sits (keep the lower third clear for captions). The product itself comes from the chosen photo, so describe only the scene around it. Each scene's image must be clearly different.${style === "STOP_MOTION" ? " Describe a real tabletop stop-motion set (handmade props, paper or felt textures, soft studio light)." : ""}
 - videoPrompt: one sentence for a later image-to-video step (5 seconds): one camera move and gentle motion in the surroundings only.
 - keepsFromWinner and changes are one plain sentence each for a business owner who is not a marketer.
+- adCopy: ${AD_COPY_RULES}
 ${style === "STOP_MOTION" ? STOP_MOTION_NOTE + " Use CUT transitions.\n" : ""}${TRUTH_RULES}
 Respond with exactly one JSON object and nothing else: ${SCRIPT_SHAPE}`;
 

@@ -343,4 +343,25 @@ describe("winner to videos", () => {
       expect(Math.abs(picture - sound)).toBeLessThan(0.2);
     } finally { await setup.dispose(); }
   }, 120_000);
+
+  it("writes Meta ad copy with each script, rewrites it on demand without remaking the video, and saves edits", async () => {
+    const setup = await harness();
+    try {
+      await setup.dnaService.requestAnalysis(setup.reference.id, crypto.randomUUID());
+      await setup.drain();
+      const batch = await setup.service.requestPlans({ referenceId: setup.reference.id, count: 3, durationSeconds: 15, actor: "owner" });
+      await setup.drain();
+      const [video] = await setup.videos.listVideos(batch.id);
+      expect(video!.plan.adCopy).toMatchObject({ primaryTexts: ["Short text 1", "Story line one.\nStory line two.", expect.stringContaining("Benefit one")], headlines: ["Headline one", "Headline two", "Headline three"], callToAction: "SHOP_NOW" });
+      await setup.service.makeVideos(batch.id, [video!.id]);
+      await setup.drain();
+      const rewritten = await setup.service.writeAdCopy(video!.id);
+      expect(rewritten.status).toBe("READY");
+      expect(rewritten.plan.adCopy).toMatchObject({ primaryTexts: [`Fresh copy for ${video!.plan.title}`, "A story.\nIn two lines.", expect.any(String)], callToAction: "CUSTOMIZE" });
+      const saved = await setup.service.saveAdCopy(video!.id, { primaryTexts: ["Mine"], headlines: ["A headline that is far too long for a Meta ad headline field"], description: "Short", callToAction: "NOT_A_BUTTON" });
+      expect(saved.plan.adCopy).toEqual({ primaryTexts: ["Mine"], headlines: ["A headline that is far too long for a Me"], description: "Short", callToAction: "SHOP_NOW" });
+      expect(saved.status).toBe("READY");
+      await expect(setup.service.saveAdCopy(video!.id, { primaryTexts: [], headlines: [] })).rejects.toMatchObject({ code: "AD_COPY_INVALID" });
+    } finally { await setup.dispose(); }
+  });
 });

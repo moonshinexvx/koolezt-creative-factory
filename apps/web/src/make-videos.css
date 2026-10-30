@@ -103,3 +103,11 @@
 .scene-clip{display:flex;gap:10px;align-items:flex-start}
 .scene-clip video{width:96px!important;max-height:170px!important;aspect-ratio:9/16;object-fit:cover;border-radius:4px;background:#0c1726;margin:0!important}
 .scene-clip>div{display:grid;gap:6px;font-size:13px;flex:1}
+.ad-copy{display:grid;gap:6px;margin-top:6px;padding:12px!important;border:1px solid #d3dae3;border-radius:8px;background:#fff}
+.ad-copy h4{margin:0!important}
+.ad-copy-header{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.ad-copy-item{display:flex;gap:8px;align-items:flex-start;justify-content:space-between;padding:6px 8px;border-radius:6px;background:#f6f8fb}
+.ad-copy-item p{margin:0;white-space:pre-wrap;font-size:13px}
+.copy-small{padding:2px 8px;font-size:12px;flex:none}
+.ad-copy label{display:grid;gap:4px;font-size:13px;color:#34495f}
+.ad-copy textarea,.ad-copy input,.ad-copy select{padding:6px 8px;border:1px solid #b7c2d1;border-radius:6px;font:inherit;width:100%;box-sizing:border-box}

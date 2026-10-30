@@ -201,9 +201,17 @@ export class FakeCreativeProvider implements CreativeProvider {
       keepsFromWinner: "Keeps the product visible from the first second.", changes: `Tests hook ${i + 1}.`,
       hookText: `Hook number ${i + 1}`, voiceover: `This is fake voiceover number ${i + 1} for ${input.product.name}.`, ctaText: "Shop now",
       voice: "nova", voiceStyle: "warm and excited", captionStyle: captions[i % captions.length], musicMood: "UPBEAT",
+      adCopy: { primaryTexts: [`Short text ${i + 1}`, "Story line one.\nStory line two.", "🐶 Benefit one\n🏠 Benefit two"], headlines: ["Headline one", "Headline two", "Headline three"], description: "Made for your door", callToAction: "SHOP_NOW" },
       scenes: [0, 1, 2].map((s) => ({ photo: input.photos.length ? (s % input.photos.length) + 1 : 1, shotType: ["wide", "close-up", "hands holding it"][s], voiceLine: `Line ${s + 1}.`, motion: motions[(i + s) % motions.length], transition: ["CUT", "WHIP", "ZOOM"][s], caption: `Caption ${s + 1}`, seconds: seconds / 3, imagePrompt: `Fake scene ${s + 1} on a wooden table.`, videoPrompt: `Slow push-in. Fake scene ${s + 1}.` }))
     }));
     return { plans, submission: { provider: "fake", model: "fake-video-plans-v1", providerTaskId: `fake-plans-${context.operationKey}`, requestId: `fake-plans-${context.operationKey}`, metadata: { operationKey: context.operationKey } } };
+  }
+
+  async writeAdCopy(input: Omit<VideoPlanInput, "photos"> & Readonly<{ plan: unknown }>, context: ProviderOperationContext): Promise<Readonly<{ adCopy: unknown; submission: ProviderSubmission }>> {
+    this.calls.push(context);
+    const title = String((input.plan as { title?: unknown }).title ?? "");
+    const adCopy = { primaryTexts: [`Fresh copy for ${title}`, "A story.\nIn two lines.", "✅ One\n✅ Two"], headlines: ["New headline", "Second headline", "Third headline"], description: "Personalized for you", callToAction: "CUSTOMIZE" };
+    return { adCopy, submission: { provider: "fake", model: "fake-ad-copy-v1", providerTaskId: `fake-ad-copy-${context.operationKey}`, requestId: `fake-ad-copy-${context.operationKey}`, metadata: { operationKey: context.operationKey } } };
   }
 
   async reviewVideoPlans(input: VideoPlanInput & Readonly<{ plans: readonly unknown[] }>, context: ProviderOperationContext): Promise<Readonly<{ plans: readonly unknown[]; submission: ProviderSubmission }>> {
