@@ -19,14 +19,14 @@ export function VideosPage({ sidebar, products }: Readonly<{ sidebar: ReactNode;
   return <main className="app-shell">{sidebar}<aside className="project-browser winner-library">
     <div className="project-browser-header"><h2>All videos</h2></div>
     <select value={productFilter} onChange={(event) => setProductFilter(event.target.value)} aria-label="Filter by product"><option value="">All products</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select>
-    <p className="muted small">{videos.length} finished video{videos.length === 1 ? "" : "s"}. Open a winner to write and make more.</p>
+    <p className="muted small">{videos.length} finished video{videos.length === 1 ? "" : "s"}. Open a winner or a product to write and make more.</p>
   </aside><section className="workspace workspace-static winner-workspace"><div className="workspace-panel">
     {error && <p className="error" role="alert">{error}</p>}
-    {videos.length === 0 ? <section className="card"><h2>No videos yet</h2><p>Open a winner, write video plans, tick the ones you like and click "Make selected videos".</p></section>
+    {videos.length === 0 ? <section className="card"><h2>No videos yet</h2><p>Open a winner or a product, write video plans, tick the ones you like and click "Make selected videos".</p></section>
       : <div className="video-library">{videos.map(({ video, batch }) => <article className="card video-tile" key={video.id}>
         <video controls preload="metadata" src={`/api/assets/${video.outputAssetId}`} />
         <h4>{video.plan.title}</h4>
-        <p className="muted small">From winner "{winnerName.get(batch.creativeReferenceId) ?? "Unknown"}" · {productName.get(batch.productId) ?? "Unknown product"} · {Math.round((video.durationMs ?? 0) / 1000)}s</p>
+        <p className="muted small">{batch.creativeReferenceId ? `From winner "${winnerName.get(batch.creativeReferenceId) ?? "Unknown"}"` : "From the product"} · {productName.get(batch.productId) ?? "Unknown product"} · {Math.round((video.durationMs ?? 0) / 1000)}s</p>
         <p className="small">{video.plan.changes}</p>
         <a className="button primary" href={`/api/videos/${video.id}/download`}>Download MP4</a>
       </article>)}</div>}

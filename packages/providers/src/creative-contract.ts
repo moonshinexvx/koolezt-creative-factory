@@ -110,15 +110,29 @@ export const WINNER_REPORT_INSTRUCTIONS = " Also return winnerReport, a plain-la
 type PlanStyle = "PHOTO_MOTION" | "STOP_MOTION";
 const DIRECTOR_ROLE = "You are the creative director of a direct-response performance agency that makes scroll-stopping short-form video ads (Meta Reels, TikTok) for small e-commerce brands selling personalized products. You think like a strategist first and a copywriter second: every idea starts from a real buyer insight, and every ad earns attention in the first second.";
 const TRUTH_RULES = "Use only product claims found in the product facts. Prices, discounts, offers, materials, shipping or claims seen in the historical winner are history, not current truth, unless the product facts state them. Never invent reviews, ratings, customer names, numbers or awards.";
+/** Where the ideas start: a winner for this product, a winner for a different product (style only), or no winner. */
+export type WinnerSource = "SAME_PRODUCT" | "OTHER_PRODUCT" | "NONE";
+export const winnerSourceOf = (winner?: Readonly<{ madeForOtherProduct?: string }>): WinnerSource => !winner ? "NONE" : winner.madeForOtherProduct ? "OTHER_PRODUCT" : "SAME_PRODUCT";
+const WINNER_INPUT: Readonly<Record<WinnerSource, string>> = {
+  SAME_PRODUCT: "an analyzed winning ad for this product (report, the rules learned from it, measured facts, transcript and real Meta results when available), ",
+  OTHER_PRODUCT: "an analyzed winning ad made for a different product (report, the rules learned from it, measured facts, transcript and real Meta results when available), ",
+  NONE: ""
+};
+const WINNER_NOTE: Readonly<Record<WinnerSource, string>> = {
+  SAME_PRODUCT: "",
+  OTHER_PRODUCT: "The winning ad sold a different product (winner.madeForOtherProduct). Borrow only how it sells: hook pattern, opening, pacing, shot rhythm, voice and call to action. Nothing it says or shows about its own product (name, design, material, size, offer) is true for this product; this product's facts and photos are the only truth.\n",
+  NONE: "There is no winning ad for this product yet. Build every idea from the product, its facts, its photos and proven short-form patterns for personalized pet products.\n"
+};
 const STOP_MOTION_NOTE = "The owner chose STOP MOTION: the video is animated in small hand-made jumps with hard cuts, like a tabletop stop-motion ad, so favour playful, tactile ideas.";
 
-export const CREATIVE_BRIEF_INSTRUCTIONS = (count: number, style: PlanStyle) => `${DIRECTOR_ROLE}
-The input holds an analyzed winning ad (report, the rules learned from it, measured facts, transcript and real Meta results when available), the product, its facts and numbered product photos (photo 1 is the main photo). Before anyone writes scripts, write the creative brief for the next ${count} ads.
+export const CREATIVE_BRIEF_INSTRUCTIONS = (count: number, style: PlanStyle, source: WinnerSource = "SAME_PRODUCT") => `${DIRECTOR_ROLE}
+The input holds ${WINNER_INPUT[source]}the product, its facts and numbered product photos (photo 1 is the main photo). Before anyone writes scripts, write the creative brief for the next ${count} ads.
+${WINNER_NOTE[source]}
 - audience: who actually buys this product and for whom (self or gift), in two plain sentences.
 - buyerInsights: 4 to 6 sharp, specific truths about why people buy or hesitate (feelings, moments, objections), not generic marketing phrases.
-- angles: ${Math.min(6, Math.max(4, count))} clearly different creative angles. Spread them across emotional, practical, gifting, identity/pride, humour or surprise, and proof. One angle should stay close to what made the winner work; the rest must be genuinely new. Each has a short id (a1, a2, ...), a name of at most 6 words, the insight it is built on, and whyItCouldWork tied to evidence from the winner or its results.
+- angles: ${Math.min(6, Math.max(4, count))} clearly different creative angles. Spread them across emotional, practical, gifting, identity/pride, humour or surprise, and proof. ${source === "NONE" ? "One angle should be a proven, safe choice for this kind of product; the rest can be bolder" : "One angle should stay close to what made the winner work; the rest must be genuinely new"}. Each has a short id (a1, a2, ...), a name of at most 6 words, the insight it is built on, and whyItCouldWork tied to ${source === "NONE" ? "the buyer insight and what the photos show" : "evidence from the winner or its results"}.
 - hooks: 10 to 12 opening lines for the first 2 seconds, each with a type from QUESTION, POV, STOP_SCROLLING, BEFORE_AFTER, BOLD_CLAIM, CURIOSITY, EMOTIONAL, SOCIAL_PROOF; use at least 6 different types. Each line is at most 9 words and would make a dog or cat owner stop scrolling.
-- directorNotes: 2 or 3 sentences on what to keep from the winner, what to avoid, and the creative bar for this round.
+- directorNotes: 2 or 3 sentences on ${source === "NONE" ? "what makes this product stand out" : "what to keep from the winner"}, what to avoid, and the creative bar for this round.
 ${style === "STOP_MOTION" ? STOP_MOTION_NOTE + "\n" : ""}${TRUTH_RULES}
 Respond with exactly one JSON object and nothing else: {"audience": string, "buyerInsights": string[], "angles": [{"id": string, "name": string, "insight": string, "whyItCouldWork": string}], "hooks": [{"type": string, "text": string}], "directorNotes": string}`;
 
@@ -130,16 +144,17 @@ const AD_COPY_RULES = `Meta ad copy that runs with the video and continues its a
   - No prices, discounts, shipping promises or urgency claims unless they are in the product facts; no "you" statements about personal attributes (Meta policy), no ALL-CAPS words.`;
 const AD_COPY_SHAPE = `{"primaryTexts": [string, string, string], "headlines": [string, string, string], "description": string, "callToAction": string}`;
 
-export const AD_COPY_INSTRUCTIONS = `${DIRECTOR_ROLE}
-The input holds the product, its facts, the winning ad's analysis and one finished video script (its angle, format, hook, voiceover and scenes). Write the ${"Meta"} ad copy for that video.
+export const AD_COPY_INSTRUCTIONS = (source: WinnerSource = "SAME_PRODUCT") => `${DIRECTOR_ROLE}
+The input holds the product, its facts, ${source === "NONE" ? "" : source === "OTHER_PRODUCT" ? "the analysis of a winning ad for a different product (style only) " : "the winning ad's analysis "}and one finished video script (its angle, format, hook, voiceover and scenes). Write the ${"Meta"} ad copy for that video.
 ${AD_COPY_RULES}
 ${TRUTH_RULES}
 Respond with exactly one JSON object and nothing else: ${AD_COPY_SHAPE}`;
 
 const SCRIPT_SHAPE = `{"plans": [{"title": string, "angle": string, "format": string, "hookType": string, "keepsFromWinner": string, "changes": string, "hookText": string, "voiceover": string, "voice": string, "voiceStyle": string, "captionStyle": string, "musicMood": string, "ctaText": string, "adCopy": ${AD_COPY_SHAPE}, "scenes": [{"photo": number, "shotType": string, "voiceLine": string, "caption": string, "seconds": number, "motion": string, "transition": string, "imagePrompt": string, "videoPrompt": string}]}]}`;
 
-export const VIDEO_SCRIPT_INSTRUCTIONS = (count: number, seconds: number, style: PlanStyle) => `${DIRECTOR_ROLE}
-The input holds the analyzed winning ad, the product, its facts, numbered product photos (photo 1 is the main photo) and the creative brief with the angles the owner approved. Write exactly ${count} complete video scripts for ${seconds}-second vertical ads, shot by shot.
+export const VIDEO_SCRIPT_INSTRUCTIONS = (count: number, seconds: number, style: PlanStyle, source: WinnerSource = "SAME_PRODUCT") => `${DIRECTOR_ROLE}
+The input holds ${WINNER_INPUT[source]}the product, its facts, numbered product photos (photo 1 is the main photo) and the creative brief with the angles the owner approved. Write exactly ${count} complete video scripts for ${seconds}-second vertical ads, shot by shot.
+${WINNER_NOTE[source]}
 Creative rules:
 - Build each script on one approved angle (spread the scripts across all approved angles; repeat an angle only when there are more scripts than angles, and then with a different format). Use the brief's insights and hooks; improve the hook wording when you can.
 - Every script uses a different format from: CUSTOMER_REVIEW (reads like a happy owner's phone review), BEFORE_AFTER (plain door or shelf, then the product), THREE_REASONS (numbered list), GIFT_REACTION (the gift moment), PET_POV_STORY (told by the pet), DETAIL_CLOSEUPS (macro craftsmanship), PROBLEM_SOLUTION, COMPARISON (generic vs personalized), DAY_IN_THE_LIFE, BOLD_STATEMENT. No two scripts share a format or a hookType (use the brief's hook types).
@@ -152,7 +167,7 @@ Creative rules:
 - musicMood is UPBEAT, WARM, EMOTIONAL, CALM or NONE. voice is one of alloy, ash, ballad, coral, echo, fable, marin, nova, onyx, sage, shimmer, verse, cedar, chosen for the speaker (a female or male owner, a friendly narrator, the pet); voiceStyle describes the delivery in one short sentence (for example "excited, fast, like telling a friend").
 - imagePrompt: one or two sentences describing a new vertical 9:16 photorealistic image for this shot: setting, people or pets if the shot needs them, props, lighting, camera angle and distance, and where the product sits (keep the lower third clear for captions). The product itself comes from the chosen photo, so describe only the scene around it. Each scene's image must be clearly different.${style === "STOP_MOTION" ? " Describe a real tabletop stop-motion set (handmade props, paper or felt textures, soft studio light)." : ""}
 - videoPrompt: one sentence for a later image-to-video step (5 seconds): one camera move and gentle motion in the surroundings only.
-- keepsFromWinner and changes are one plain sentence each for a business owner who is not a marketer.
+- keepsFromWinner and changes are one plain sentence each for a business owner who is not a marketer${source === "NONE" ? ": keepsFromWinner names the proven ad pattern the script builds on, changes says what is fresh about it" : ""}.
 - adCopy: ${AD_COPY_RULES}
 ${style === "STOP_MOTION" ? STOP_MOTION_NOTE + " Use CUT transitions.\n" : ""}${TRUTH_RULES}
 Respond with exactly one JSON object and nothing else: ${SCRIPT_SHAPE}`;

@@ -183,7 +183,7 @@ function PlanCard({ video, selected, working, onToggle, onEdit, onSceneImages, o
     {video.status === "FAILED" && video.failureMessage && <p className="error small">{video.failureMessage}</p>}
     <dl>
       {plan.angle && <><dt>Angle</dt><dd>{plan.angle}</dd></>}
-      <dt>Keeps from the winner</dt><dd>{plan.keepsFromWinner || "—"}</dd>
+      <dt>Builds on</dt><dd>{plan.keepsFromWinner || "—"}</dd>
       <dt>What's new</dt><dd>{plan.changes || "—"}</dd>
       <dt>Hook (first 3s)</dt><dd><b>{plan.hookText}</b></dd>
       <dt>Call to action</dt><dd>{plan.ctaText}</dd>
@@ -244,8 +244,11 @@ function PlanTile({ video, open, selected, onOpen, onToggle }: Readonly<{ video:
   </div>;
 }
 
-/** Writes new video plans from an analyzed winner, then makes the chosen ones on the server. */
-export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId: string; reportReady: boolean }>) {
+/**
+ * Writes new video plans, then makes the chosen ones on the server. With referenceId the plans follow that winner's style,
+ * for the winner's own product (winnerProductId) or another product picked here; with productId alone they come from the product only.
+ */
+export function MakeVideos({ referenceId, winnerProductId, productId, reportReady }: Readonly<{ referenceId?: string; winnerProductId?: string; productId?: string; reportReady: boolean }>) {
   const [batches, setBatches] = useState<any[]>([]);
   const [count, setCount] = useState<3 | 6 | 12>(6);
   const [length, setLength] = useState<15 | 30>(15);
@@ -259,7 +262,12 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
   const [panel, setPanel] = useState<HTMLElement | null>(null);
   useEffect(() => { setPanel(document.getElementById("plan-panel")); }, []);
   const [products, setProducts] = useState<any[]>([]);
-  const load = useCallback(async () => setBatches(await api(`/api/video-batches?referenceId=${encodeURIComponent(referenceId)}`)), [referenceId]);
+  const [target, setTarget] = useState(winnerProductId ?? "");
+  const load = useCallback(async () => setBatches(await api(`/api/video-batches?${referenceId ? `referenceId=${encodeURIComponent(referenceId)}` : `productId=${encodeURIComponent(productId ?? "")}`}`)), [referenceId, productId]);
+  const productName = (id: string) => products.find((product: any) => product.id === id)?.name ?? "another product";
+  const start = () => referenceId
+    ? api(`/api/creative-references/${referenceId}/video-plans`, "POST", { count, durationSeconds: length, style, ...(target ? { productId: target } : {}) })
+    : api(`/api/products/${productId}/video-plans`, "POST", { count, durationSeconds: length, style });
   useEffect(() => { void api("/api/products").then(setProducts).catch(() => undefined); }, []);
   const photosOf = (productId: string) => (products.find((product: any) => product.id === productId)?.assets ?? []).filter((asset: any) => asset.kind === "IMAGE");
   useEffect(() => { void load().catch((reason) => setError(reason instanceof Error ? reason.message : "Could not load videos.")); }, [load]);
@@ -287,22 +295,24 @@ export function MakeVideos({ referenceId, reportReady }: Readonly<{ referenceId:
   </div>;
 
   return <section className="card make-videos">
-    <h3>Make new videos from this winner</h3>
-    {!reportReady ? <p className="muted">Available once the analysis report is ready.</p> : <>
-      <p className="muted">Claude works like a marketing director: it writes a creative brief (buyers, angles, hooks) for you to approve, then full shot-by-shot scripts in different formats, and a critic reviews and improves each one. You choose which videos to make.</p>
+    <h3>{referenceId ? "Make new videos from this winner" : "Make videos for this product"}</h3>
+    {!reportReady ? <p className="muted">{referenceId ? "Available once the analysis report is ready." : "Add at least one product photo first."}</p> : <>
+      <p className="muted">Claude works like a marketing director: it writes a creative brief (buyers, angles, hooks) for you to approve, then full shot-by-shot scripts in different formats, and a critic reviews and improves each one. You choose which videos to make.{referenceId ? "" : " There is no winner here, so the ideas come from the product's description, facts and photos. If a similar product has a winning ad, open that winner and choose this product there to borrow its style."}</p>
       <div className="make-controls">
+        {referenceId && <label>Make videos for<select value={target} onChange={(event) => setTarget(event.target.value)}>{!winnerProductId && <option value="">Choose a product…</option>}{products.map((product: any) => <option key={product.id} value={product.id}>{product.name}{product.id === winnerProductId ? " (this winner's product)" : ""}</option>)}</select></label>}
         <label>How many<select value={count} onChange={(event) => setCount(Number(event.target.value) as 3 | 6 | 12)}><option value={3}>3 videos</option><option value={6}>6 videos</option><option value={12}>12 videos</option></select></label>
         <label>Length<select value={length} onChange={(event) => setLength(Number(event.target.value) as 15 | 30)}><option value={15}>15 seconds</option><option value={30}>30 seconds</option></select></label>
         <label>Style<select value={style} onChange={(event) => setStyle(event.target.value as "PHOTO_MOTION" | "STOP_MOTION")}><option value="PHOTO_MOTION">Photo motion (smooth zoom and pan)</option><option value="STOP_MOTION">Stop motion (hand-made jumps)</option></select></label>
-        <button className="primary" disabled={working || writing} onClick={() => void run(() => api(`/api/creative-references/${referenceId}/video-plans`, "POST", { count, durationSeconds: length, style }), "Could not start writing plans.")}>{writing ? "Claude is working…" : `Start creative brief for ${count} videos`}</button>
+        <button className="primary" disabled={working || writing || Boolean(referenceId && !target)} onClick={() => void run(start, "Could not start writing plans.")}>{writing ? "Claude is working…" : `Start creative brief for ${count} videos`}</button>
       </div>
+      {referenceId && target && target !== winnerProductId && <p className="muted small">Claude borrows only this winner's style (hook, pacing, shots, voice, call to action). Words, facts and photos come from {productName(target)}.</p>}
     </>}
     {error && <p className="error" role="alert">{error}</p>}
     {batches.map(({ batch, videos }) => {
       const chosen = videos.filter((video: any) => selected.includes(video.id));
       return <div className="plan-batch" key={batch.id}>
-        <div className="plan-batch-header"><b>{batch.requestedCount} plans · {batch.targetDurationMs / 1000}s</b><span className="muted small">{new Date(batch.createdAt).toLocaleString()} <button type="button" className="danger compact" disabled={working || batch.status === "WRITING" || batch.status === "WRITING_BRIEF"} onClick={() => { if (window.confirm(`Delete this set of ${videos.length || batch.requestedCount} plans, with their made videos, AI images and clips? This cannot be undone.`)) void run(async () => { await api(`/api/video-batches/${batch.id}`, "DELETE"); if (videos.some((video: any) => video.id === open)) setOpen(""); }, "Could not delete this set."); }}>Delete set</button></span></div>
-        {batch.status === "WRITING_BRIEF" && <p className="muted">Claude is studying the winner and writing the creative brief. This takes about 1–2 minutes and refreshes automatically.</p>}
+        <div className="plan-batch-header"><b>{batch.requestedCount} plans · {batch.targetDurationMs / 1000}s{referenceId && batch.productId !== winnerProductId ? ` · for ${productName(batch.productId)}` : ""}</b><span className="muted small">{new Date(batch.createdAt).toLocaleString()} <button type="button" className="danger compact" disabled={working || batch.status === "WRITING" || batch.status === "WRITING_BRIEF"} onClick={() => { if (window.confirm(`Delete this set of ${videos.length || batch.requestedCount} plans, with their made videos, AI images and clips? This cannot be undone.`)) void run(async () => { await api(`/api/video-batches/${batch.id}`, "DELETE"); if (videos.some((video: any) => video.id === open)) setOpen(""); }, "Could not delete this set."); }}>Delete set</button></span></div>
+        {batch.status === "WRITING_BRIEF" && <p className="muted">Claude is studying {referenceId ? "the winner" : "the product"} and writing the creative brief. This takes about 1–2 minutes and refreshes automatically.</p>}
         {batch.status === "BRIEF_READY" && <BriefReview batch={batch} working={working} onApprove={(angleIds) => void run(() => api(`/api/video-batches/${batch.id}/approve-brief`, "POST", { angleIds }), "Could not start the scripts.")} onDiscard={() => void run(() => api(`/api/video-batches/${batch.id}/discard-brief`, "POST", {}), "Could not discard the brief.")} />}
         {batch.status === "WRITING" && <p className="muted">Step 2 of 2 · Claude is writing {batch.requestedCount} shot-by-shot scripts, then a critic checks each one (hook, story, shots, call to action, claims) and fixes weak parts. This takes about 3–5 minutes and refreshes automatically.</p>}
         {batch.status === "FAILED" && (batch.failureMessage === "Discarded by the owner." ? <p className="muted small">Brief discarded.</p> : <p className="error">Writing these plans failed: {batch.failureMessage ?? "unknown error"}. Start a new set to try again.</p>)}

@@ -16,7 +16,7 @@ describe("winner-to-video web app", () => {
     expect(make).toContain("/api/video-batches/${batch.id}/make");
     expect(make).toContain("Make this video");
     const winners = await source("winners.tsx");
-    expect(winners).toContain("<MakeVideos referenceId={reference.id}");
+    expect(winners).toContain("<MakeVideos key={reference.id} referenceId={reference.id}");
     expect(winners).not.toContain("Open campaign with this winner");
     expect(winners).not.toContain("Use this winner for new creatives");
   });

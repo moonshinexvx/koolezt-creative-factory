@@ -420,7 +420,8 @@ export type VideoPlanReview = Readonly<{ checks: Readonly<Partial<Record<ReviewC
 /** WRITING_BRIEF -> BRIEF_READY (owner picks angles) -> WRITING (scripts + review) -> READY. */
 export type WinnerVideoBatchStatus = "WRITING_BRIEF" | "BRIEF_READY" | "WRITING" | "READY" | "FAILED";
 export type WinnerVideoBatch = Readonly<{
-  id: string; creativeReferenceId: string; productId: string; requestedCount: 3 | 6 | 12; targetDurationMs: 15_000 | 30_000;
+  /** The winner whose style the set follows; absent when the set is made from the product alone. productId may differ from the winner's product. */
+  id: string; creativeReferenceId?: string; productId: string; requestedCount: 3 | 6 | 12; targetDurationMs: 15_000 | 30_000;
   status: WinnerVideoBatchStatus; failureMessage?: string; providerMetadata: Readonly<Record<string, unknown>>; createdBy: string; createdAt: string; updatedAt: string;
 }>;
 export type WinnerVideoStatus = "PLANNED" | "QUEUED" | "RENDERING" | "READY" | "FAILED";
@@ -446,7 +447,8 @@ export type VideoPlanInput = Readonly<{
   brief?: CreativeBrief;
   product: Readonly<{ name: string; description: string; facts: readonly string[]; lookRules?: unknown }>;
   photos: readonly Readonly<{ index: number; label: string; mimeType: string; bytesBase64: string }>[];
-  winner: Readonly<{ name: string; report?: unknown; dna?: unknown; measurements?: unknown; metaResults?: unknown }>;
+  /** Absent when there is no winner. madeForOtherProduct names the winner's own product when the videos are for a different one. */
+  winner?: Readonly<{ name: string; madeForOtherProduct?: string; report?: unknown; dna?: unknown; measurements?: unknown; metaResults?: unknown }>;
 }>;
 
 export type CreativeWinnerReportStatus = "PENDING" | "READY" | "FAILED";

@@ -213,7 +213,7 @@ function WinnerReportView({ entry, working, onRegenerate, onAnalyze, onSaveDna, 
       </section>
     </>}
 
-    <MakeVideos referenceId={reference.id} reportReady={record?.status === "READY"} />
+    <MakeVideos key={reference.id} referenceId={reference.id} {...(reference.productId ? { winnerProductId: reference.productId } : {})} reportReady={record?.status === "READY"} />
 
     {latest && <section className="card dna-section">
       <details><summary>Advanced: rules the AI learned from this ad (version {latest.revision})</summary>

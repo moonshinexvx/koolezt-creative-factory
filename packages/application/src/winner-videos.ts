@@ -174,18 +174,24 @@ export class WinnerVideoService {
   /**
    * Starts a new set of videos. With a director-capable provider, Claude first writes a creative brief and the owner
    * picks angles before scripts are written; otherwise scripts are written straight away.
+   * With a winner the videos follow its style, for the winner's own product or for productId; without one they are
+   * made from productId alone.
    */
-  async requestPlans(input: Readonly<{ referenceId: string; count: 3 | 6 | 12; durationSeconds: 15 | 30; style?: VideoPlanStyle; actor: string }>): Promise<WinnerVideoBatch> {
-    const reference = await this.d.dna.getReference(input.referenceId);
-    const report = (await this.d.dna.listWinnerReports()).find((item) => item.creativeReferenceId === reference.id);
-    if (!report || report.status !== "READY") throw new DomainError("WINNER_REPORT_REQUIRED", "Finish the winner's analysis report before making new videos from it.");
-    if (!reference.productId) throw new DomainError("CREATIVE_REFERENCE_PRODUCT_REQUIRED", "Link this winner to a product first.");
-    const { photos } = await this.productPhotos(reference.productId);
+  async requestPlans(input: Readonly<{ referenceId?: string; productId?: string; count: 3 | 6 | 12; durationSeconds: 15 | 30; style?: VideoPlanStyle; actor: string }>): Promise<WinnerVideoBatch> {
+    const reference = input.referenceId ? await this.d.dna.getReference(input.referenceId) : undefined;
+    if (reference) {
+      const report = (await this.d.dna.listWinnerReports()).find((item) => item.creativeReferenceId === reference.id);
+      if (!report || report.status !== "READY") throw new DomainError("WINNER_REPORT_REQUIRED", "Finish the winner's analysis report before making new videos from it.");
+    }
+    const productId = input.productId ?? reference?.productId;
+    if (!productId) throw new DomainError("CREATIVE_REFERENCE_PRODUCT_REQUIRED", "Choose the product to make videos for.");
+    const { photos } = await this.productPhotos(productId);
     if (!photos.length) throw new DomainError("PRODUCT_PHOTOS_REQUIRED", "Add at least one product photo before making videos.");
-    if ((await this.d.videos.listBatches(reference.id)).some((batch) => batch.status === "WRITING" || batch.status === "WRITING_BRIEF")) throw new DomainError("VIDEO_PLANS_IN_PROGRESS", "Plans for this winner are already being written.");
+    const sameSource = (batch: WinnerVideoBatch) => reference ? batch.creativeReferenceId === reference.id : !batch.creativeReferenceId && batch.productId === productId;
+    if ((await this.d.videos.listBatches(reference?.id)).some((batch) => sameSource(batch) && (batch.status === "WRITING" || batch.status === "WRITING_BRIEF"))) throw new DomainError("VIDEO_PLANS_IN_PROGRESS", reference ? "Plans for this winner are already being written." : "Plans for this product are already being written.");
     const now = this.now();
     const director = Boolean(this.d.provider.writeCreativeBrief);
-    const batch: WinnerVideoBatch = { id: this.id(), creativeReferenceId: reference.id, productId: reference.productId, requestedCount: input.count, targetDurationMs: input.durationSeconds === 30 ? 30_000 : 15_000, status: director ? "WRITING_BRIEF" : "WRITING", providerMetadata: { style: input.style ?? "PHOTO_MOTION" }, createdBy: input.actor, createdAt: now, updatedAt: now };
+    const batch: WinnerVideoBatch = { id: this.id(), ...(reference ? { creativeReferenceId: reference.id } : {}), productId, requestedCount: input.count, targetDurationMs: input.durationSeconds === 30 ? 30_000 : 15_000, status: director ? "WRITING_BRIEF" : "WRITING", providerMetadata: { style: input.style ?? "PHOTO_MOTION" }, createdBy: input.actor, createdAt: now, updatedAt: now };
     await this.d.videos.createBatch(batch);
     await this.d.jobs.enqueue({ id: this.id(), kind: director ? "WRITE_CREATIVE_BRIEF" : "WRITE_VIDEO_PLANS", targetId: batch.id, operationKey: `${director ? "brief" : "plans"}:${batch.id}`, status: "PENDING", attempts: 0, createdAt: now, updatedAt: now });
     return batch;
@@ -193,12 +199,7 @@ export class WinnerVideoService {
 
   /** Everything Claude needs about the winner and the product, shared by the brief, script and review steps. */
   private async planInput(batch: WinnerVideoBatch): Promise<Readonly<{ input: VideoPlanInput; photoIds: readonly string[] }>> {
-    const reference = await this.d.dna.getReference(batch.creativeReferenceId);
-    const [{ product, photos }, reports, references, links] = await Promise.all([this.productPhotos(batch.productId), this.d.dna.listWinnerReports(), this.d.dna.listReferences(), this.d.dna.listMetaLinks()]);
-    const report = reports.find((item) => item.creativeReferenceId === reference.id);
-    const revisions = references.find((entry) => entry.reference.id === reference.id)?.revisions ?? [];
-    const dna = revisions.find((revision) => revision.id === reference.approvedRevisionId) ?? revisions.at(-1);
-    const metrics = links.find((link) => link.creativeReferenceId === reference.id)?.metrics;
+    const [{ product, photos }, winner] = await Promise.all([this.productPhotos(batch.productId), batch.creativeReferenceId ? this.winnerInput(batch.creativeReferenceId, batch.productId) : undefined]);
     const photoPayload = await Promise.all(photos.map(async (photo, index) => ({ index: index + 1, label: photo.label, mimeType: photo.mimeType, bytesBase64: Buffer.from(await this.d.storage.read(photo.storageKey)).toString("base64") })));
     return {
       photoIds: photos.map((photo) => photo.id),
@@ -206,9 +207,21 @@ export class WinnerVideoService {
         requestedCount: batch.requestedCount, targetDurationMs: batch.targetDurationMs, style: batchStyle(batch),
         product: { name: product.name, description: product.description, facts: product.claims.map((claim) => claim.text), ...(product.personalizationVisualAuthority ? { lookRules: product.personalizationVisualAuthority } : {}) },
         photos: photoPayload,
-        winner: { name: reference.displayName, ...(report?.report ? { report: report.report } : {}), ...(dna ? { dna: { preserveTraits: dna.preserveTraits, safeToVaryTraits: dna.safeToVaryTraits, avoidTraits: dna.avoidTraits, openingPattern: dna.openingPattern, pacingPattern: dna.pacingPattern, ctaPattern: dna.ctaPattern } } : {}), ...(report?.measurements ? { measurements: { durationMs: report.measurements.durationMs, shotCount: report.measurements.shotCount, wordsPerMinute: report.measurements.wordsPerMinute, transcriptText: report.measurements.transcriptText } } : {}), ...(metrics ? { metaResults: metrics } : {}) }
+        ...(winner ? { winner } : {})
       }
     };
+  }
+
+  /** The winner's analysis; when the videos are for another product, the winner's own product is named so Claude borrows only its style. */
+  private async winnerInput(referenceId: string, productId: string): Promise<NonNullable<VideoPlanInput["winner"]>> {
+    const reference = await this.d.dna.getReference(referenceId);
+    const [reports, references, links] = await Promise.all([this.d.dna.listWinnerReports(), this.d.dna.listReferences(), this.d.dna.listMetaLinks()]);
+    const report = reports.find((item) => item.creativeReferenceId === reference.id);
+    const revisions = references.find((entry) => entry.reference.id === reference.id)?.revisions ?? [];
+    const dna = revisions.find((revision) => revision.id === reference.approvedRevisionId) ?? revisions.at(-1);
+    const metrics = links.find((link) => link.creativeReferenceId === reference.id)?.metrics;
+    const otherProduct = reference.productId === productId ? undefined : reference.productId ? await this.d.repository.getProduct(reference.productId).then((item) => item.name, () => "another product") : "another product";
+    return { name: reference.displayName, ...(otherProduct ? { madeForOtherProduct: otherProduct } : {}), ...(report?.report ? { report: report.report } : {}), ...(dna ? { dna: { preserveTraits: dna.preserveTraits, safeToVaryTraits: dna.safeToVaryTraits, avoidTraits: dna.avoidTraits, openingPattern: dna.openingPattern, pacingPattern: dna.pacingPattern, ctaPattern: dna.ctaPattern } } : {}), ...(report?.measurements ? { measurements: { durationMs: report.measurements.durationMs, shotCount: report.measurements.shotCount, wordsPerMinute: report.measurements.wordsPerMinute, transcriptText: report.measurements.transcriptText } } : {}), ...(metrics ? { metaResults: metrics } : {}) };
   }
 
   /** A paid request is never repeated automatically: any failure ends this batch and the owner can start a new one. */
@@ -529,8 +542,9 @@ export class WinnerVideoService {
     return join(folder, tracks[pick]!);
   }
 
-  async list(referenceId?: string) {
-    const batches = await this.d.videos.listBatches(referenceId);
+  /** Sets for one winner, or (with productId) the sets made from that product alone, or all sets. */
+  async list(referenceId?: string, productId?: string) {
+    const batches = (await this.d.videos.listBatches(referenceId)).filter((batch) => !productId || (batch.productId === productId && !batch.creativeReferenceId));
     return Promise.all(batches.map(async (batch) => ({ batch, videos: await this.d.videos.listVideos(batch.id) })));
   }
 }

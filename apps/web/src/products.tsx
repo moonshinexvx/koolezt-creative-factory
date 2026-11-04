@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import { api } from "./api.js";
+import { MakeVideos } from "./make-videos.js";
 
 type Draft = { name: string; description: string; facts: string; defaultCta: string; neverChange: string; customersCanChange: string };
 const emptyDraft: Draft = { name: "", description: "", facts: "", defaultCta: "Shop now", neverChange: "", customersCanChange: "" };
@@ -106,5 +107,6 @@ export function ProductsPage({ sidebar, products, onChanged }: Readonly<{ sideba
       {photos.length === 0 && <p className="empty">No photos yet. Add at least one to make videos.</p>}
       <label className="upload-label">Add photos (PNG, JPEG or WebP)<input ref={fileInput} type="file" multiple accept="image/png,image/jpeg,image/webp" disabled={working} onChange={(event) => void uploadPhotos(event.target.files)} /></label>
     </section>}
-  </div></section></main>;
+    {selected && <MakeVideos key={`${selected.id}:${photos.length}`} productId={selected.id} reportReady={photos.length > 0} />}
+  </div><aside id="plan-panel" className="plan-panel" aria-label="Open video plan" /></section></main>;
 }

@@ -10,7 +10,7 @@ const mapJob = (r: any): WinnerJob => ({
   createdAt: iso(r.created_at), updatedAt: iso(r.updated_at)
 });
 const mapBatch = (r: any): WinnerVideoBatch => ({
-  id: r.id, creativeReferenceId: r.creative_reference_id, productId: r.product_id, requestedCount: Number(r.requested_count) as 3 | 6 | 12,
+  id: r.id, ...(r.creative_reference_id ? { creativeReferenceId: r.creative_reference_id } : {}), productId: r.product_id, requestedCount: Number(r.requested_count) as 3 | 6 | 12,
   targetDurationMs: Number(r.target_duration_ms) as 15_000 | 30_000, status: r.status, ...(r.failure_message ? { failureMessage: r.failure_message } : {}),
   providerMetadata: r.provider_metadata ?? {}, createdBy: r.created_by, createdAt: iso(r.created_at), updatedAt: iso(r.updated_at)
 });
@@ -49,7 +49,7 @@ export class PostgresWinnerVideoStore implements WinnerVideoRepository {
   constructor(private readonly pool: Pool) {}
   async createBatch(b: WinnerVideoBatch): Promise<void> {
     await this.pool.query(`INSERT INTO winner_video_batches(id,creative_reference_id,product_id,requested_count,target_duration_ms,status,failure_message,provider_metadata,created_by,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11)`,
-      [b.id, b.creativeReferenceId, b.productId, b.requestedCount, b.targetDurationMs, b.status, b.failureMessage ?? null, JSON.stringify(b.providerMetadata), b.createdBy, b.createdAt, b.updatedAt]);
+      [b.id, b.creativeReferenceId ?? null, b.productId, b.requestedCount, b.targetDurationMs, b.status, b.failureMessage ?? null, JSON.stringify(b.providerMetadata), b.createdBy, b.createdAt, b.updatedAt]);
   }
   async updateBatch(b: WinnerVideoBatch): Promise<void> {
     await this.pool.query("UPDATE winner_video_batches SET status=$2,failure_message=$3,provider_metadata=$4::jsonb,updated_at=$5 WHERE id=$1", [b.id, b.status, b.failureMessage?.slice(0, 500) ?? null, JSON.stringify(b.providerMetadata), b.updatedAt]);

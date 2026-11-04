@@ -10,6 +10,7 @@ import { FakeExternalMediaDeliveryProvider, InlineCompositionOutputIngestor, Loc
 import { FakeCompositionProvider, FakeCreativeProvider, FakeSceneImageProvider, FakeVideoGenerationProvider, FakeVoiceProvider } from "@koolezt/providers";
 import { sceneImagePrompt } from "@koolezt/domain";
 import type { CreativeBrief, CreativeDnaPreprocessor } from "@koolezt/domain";
+import { CREATIVE_BRIEF_INSTRUCTIONS, VIDEO_SCRIPT_INSTRUCTIONS, winnerSourceOf } from "../packages/providers/src/creative-contract.js";
 
 const architecture = process.arch === "arm64" ? "arm64" : "x64";
 const ffmpeg = resolve(`node_modules/ffmpeg-static/ffmpeg${process.platform === "win32" ? ".exe" : ""}`);
@@ -388,5 +389,56 @@ describe("winner to videos", () => {
       expect(setup.videos.discardedMedia).not.toContain(setup.photo.id);
       expect((await setup.repository.getProduct(setup.product.id)).assets.map((asset) => asset.id)).toContain(setup.photo.id);
     } finally { await setup.dispose(); }
+  });
+
+  it("borrows a winner's style for another product, and makes videos from a product with no winner", async () => {
+    const setup = await harness();
+    try {
+      await setup.dnaService.requestAnalysis(setup.reference.id, crypto.randomUUID());
+      await setup.drain();
+      const otherPhoto = await setup.storage.put("products/other/photo.jpg", { bytes: new Uint8Array(await readFile(join(setup.root, "photo.jpg"))), mimeType: "image/jpeg", extension: "jpg", metadata: {} });
+      const other = { ...setup.product, id: crypto.randomUUID(), slug: "colorful-dog-sign", name: "Colorful Dog Address Sign", assets: [{ id: otherPhoto.id, kind: "IMAGE" as const, label: "Colorful", storageKey: otherPhoto.storageKey, mimeType: "image/jpeg" }] };
+      await setup.repository.saveProduct(other);
+      const briefSpy = vi.spyOn(setup.provider, "writeCreativeBrief");
+
+      // A winner of the first product, used as the style for the second one.
+      const borrowed = await setup.service.requestPlans({ referenceId: setup.reference.id, productId: other.id, count: 3, durationSeconds: 15, actor: "owner" });
+      expect(borrowed).toMatchObject({ creativeReferenceId: setup.reference.id, productId: other.id });
+      await setup.drain();
+      expect(briefSpy.mock.calls[0]![0]).toMatchObject({ product: { name: "Colorful Dog Address Sign" }, winner: { name: "Ad1", madeForOtherProduct: setup.product.name } });
+      const borrowedVideos = await setup.videos.listVideos(borrowed.id);
+      expect(borrowedVideos.every((video) => video.plan.scenes.every((scene) => scene.photoAssetId === otherPhoto.id))).toBe(true);
+
+      // The same product as the winner: no "other product" note.
+      await setup.service.requestPlans({ referenceId: setup.reference.id, count: 3, durationSeconds: 15, actor: "owner" });
+      await setup.drain();
+      expect(briefSpy.mock.calls[1]![0].winner).not.toHaveProperty("madeForOtherProduct");
+
+      // No winner at all: the brief gets only the product.
+      const alone = await setup.service.requestPlans({ productId: other.id, count: 3, durationSeconds: 15, actor: "owner" });
+      expect(alone.creativeReferenceId).toBeUndefined();
+      await expect(setup.service.requestPlans({ productId: other.id, count: 3, durationSeconds: 15, actor: "owner" })).rejects.toMatchObject({ code: "VIDEO_PLANS_IN_PROGRESS" });
+      await setup.drain();
+      expect(briefSpy.mock.calls[2]![0]).not.toHaveProperty("winner");
+      expect((await setup.videos.getBatch(alone.id)).status).toBe("READY");
+      expect((await setup.videos.listVideos(alone.id))).toHaveLength(3);
+      // The product page lists only its own winner-free sets; the winner page lists both sets that used the winner.
+      expect((await setup.service.list(undefined, other.id)).map((entry) => entry.batch.id)).toEqual([alone.id]);
+      expect((await setup.service.list(setup.reference.id)).map((entry) => entry.batch.id)).toContain(borrowed.id);
+      expect((await setup.service.list(setup.reference.id)).map((entry) => entry.batch.id)).not.toContain(alone.id);
+      await expect(setup.service.requestPlans({ count: 3, durationSeconds: 15, actor: "owner" })).rejects.toMatchObject({ code: "CREATIVE_REFERENCE_PRODUCT_REQUIRED" });
+    } finally { await setup.dispose(); }
+  });
+
+  it("tells Claude whether the winner is for this product, another product, or missing", () => {
+    expect(winnerSourceOf()).toBe("NONE");
+    expect(winnerSourceOf({ madeForOtherProduct: "Sign" })).toBe("OTHER_PRODUCT");
+    expect(winnerSourceOf({})).toBe("SAME_PRODUCT");
+    expect(CREATIVE_BRIEF_INSTRUCTIONS(3, "PHOTO_MOTION", "OTHER_PRODUCT")).toContain("Borrow only how it sells");
+    const none = CREATIVE_BRIEF_INSTRUCTIONS(3, "PHOTO_MOTION", "NONE");
+    expect(none).toContain("There is no winning ad for this product yet");
+    expect(none).not.toContain("what made the winner work");
+    expect(VIDEO_SCRIPT_INSTRUCTIONS(3, 15, "PHOTO_MOTION", "NONE")).toContain("keepsFromWinner names the proven ad pattern");
+    expect(CREATIVE_BRIEF_INSTRUCTIONS(3, "PHOTO_MOTION")).not.toContain("Borrow only");
   });
 });
