@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { canonicalizeVideoPlan, CreativeDnaService, CreativeFactoryService, WinnerJobRunner, WinnerVideoService } from "@koolezt/application";
+import { canonicalizeVideoPlan, CreativeDnaService, spreadScenePhotos, CreativeFactoryService, WinnerJobRunner, WinnerVideoService } from "@koolezt/application";
 import type { VideoRenderer } from "@koolezt/application";
 import { InMemoryCreativeDnaStore, InMemoryCreativeStrategyStore, InMemoryFactoryRepository, InMemoryWinnerJobStore, InMemoryWinnerVideoStore } from "@koolezt/infrastructure";
 import { FakeExternalMediaDeliveryProvider, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, MetadataMediaInspector, PlanVideoRenderer, buildPlanVideoArguments, planTimeline, wrapText } from "@koolezt/media";
@@ -24,11 +24,23 @@ describe("video plan clean-up", () => {
       scenes: [{ photo: 1, motion: "ZOOM_IN", caption: "First", seconds: 2 }, { photo: 9, motion: "PAN_LEFT", caption: "Missing photo", seconds: 5 }, { photo: 2, motion: "SPIN", caption: "Second", seconds: 2 }]
     }, ["photo-a", "photo-b"], 15_000)!;
     expect(plan.title).toBe("Night porch");
-    expect(plan.scenes.map((scene) => [scene.photoAssetId, scene.motion])).toEqual([["photo-a", "ZOOM_IN"], ["photo-a", "PAN_LEFT"], ["photo-b", "ZOOM_IN"]]);
+    // The unknown photo falls back to the main photo, then the photos are spread so no scene repeats the one before.
+    expect(plan.scenes.map((scene) => [scene.photoAssetId, scene.motion])).toEqual([["photo-a", "ZOOM_IN"], ["photo-b", "PAN_LEFT"], ["photo-a", "ZOOM_IN"]]);
     expect(plan.scenes.reduce((sum, scene) => sum + scene.durationMs, 0)).toBe(15_000);
     expect(plan.hookText.split(" ")).toHaveLength(8);
     expect(plan.ctaText.split(" ")).toHaveLength(6);
     expect(canonicalizeVideoPlan({ voiceover: "x", scenes: [{ photo: 1 }] }, ["photo-a"], 15_000)).toBeUndefined();
+  });
+
+  it("spreads scenes over the product's mockups instead of reusing one design", () => {
+    // Claude picked photo 1 for four of five scenes while six mockups exist.
+    expect(spreadScenePhotos(["p1", "p1", "p1", "p1", "p4"], ["p1", "p2", "p3", "p4", "p5", "p6"])).toEqual(["p1", "p2", "p3", "p5", "p4"]);
+    // A good choice is kept as it is.
+    expect(spreadScenePhotos(["p3", "p1", "p2"], ["p1", "p2", "p3"])).toEqual(["p3", "p1", "p2"]);
+    // Fewer photos than scenes: each is used about equally and never twice in a row.
+    const few = spreadScenePhotos(["a", "a", "a", "a", "a"], ["a", "b"]);
+    expect(few).toEqual(["a", "b", "a", "b", "a"]);
+    expect(spreadScenePhotos(["a", "a"], ["a"])).toEqual(["a", "a"]);
   });
 
   it("times every clip and transition in whole frames with spare frames, so the picture never ends early", () => {

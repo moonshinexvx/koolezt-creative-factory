@@ -81,10 +81,35 @@ function planExtras(raw: Raw): Partial<VideoPlan> {
   };
 }
 
+/**
+ * The product photos are different mockups, so a video should show as many of them as it can. Claude's choice is kept
+ * unless it overuses a photo (more than its fair share: once each when there are enough photos) or repeats the previous
+ * scene's photo; such a scene gets the least-used other photo instead.
+ */
+export function spreadScenePhotos(chosen: readonly string[], photoAssetIds: readonly string[]): string[] {
+  const available = [...new Set(photoAssetIds)];
+  if (available.length < 2) return [...chosen];
+  const limit = Math.ceil(chosen.length / available.length);
+  const used = new Map<string, number>();
+  const result: string[] = [];
+  for (const photo of chosen) {
+    const previous = result.at(-1);
+    const keep = (used.get(photo) ?? 0) < limit && photo !== previous;
+    // Ties go to a photo that no later scene asked for, so later choices can stay as Claude made them.
+    const later = chosen.slice(result.length + 1);
+    const cost = (candidate: string) => (used.get(candidate) ?? 0) * 100 + later.filter((item) => item === candidate).length;
+    const next = keep ? photo : available.filter((candidate) => candidate !== previous)
+      .reduce((best, candidate) => cost(candidate) < cost(best) ? candidate : best);
+    used.set(next, (used.get(next) ?? 0) + 1);
+    result.push(next);
+  }
+  return result;
+}
+
 /** Turns the model's script into something the renderer can always build; photo numbers outside the list are dropped. */
 export function canonicalizeVideoPlan(value: unknown, photoAssetIds: readonly string[], targetDurationMs: number, style: VideoPlanStyle = "PHOTO_MOTION"): VideoPlan | undefined {
   const raw = asRaw(value);
-  const scenes = (Array.isArray(raw.scenes) ? raw.scenes : []).flatMap((item) => {
+  const picked = (Array.isArray(raw.scenes) ? raw.scenes : []).flatMap((item) => {
     const scene = asRaw(item);
     const photo = Number(scene.photo);
     // A shot without a usable photo number falls back to the main photo; AI scene images replace it later anyway.
@@ -94,6 +119,8 @@ export function canonicalizeVideoPlan(value: unknown, photoAssetIds: readonly st
     const seconds = Number(scene.seconds);
     return [{ photoAssetId, motion, caption: words(text(scene.caption, 80), 9), durationMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 3000, ...sceneExtras(scene) }];
   }).slice(0, MAX_SCENES);
+  const spread = spreadScenePhotos(picked.map((scene) => scene.photoAssetId), photoAssetIds);
+  const scenes = picked.map((scene, index) => ({ ...scene, photoAssetId: spread[index]! }));
   const voiceover = text(raw.voiceover, 900) || text(scenes.map((scene) => scene.voiceLine ?? "").join(" "), 900);
   if (scenes.length < 2 || !voiceover) return undefined;
   const planned = scenes.reduce((sum, scene) => sum + scene.durationMs, 0);
