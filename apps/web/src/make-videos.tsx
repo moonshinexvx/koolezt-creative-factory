@@ -21,6 +21,16 @@ const seconds = (ms: number) => `${Math.round(ms / 100) / 10}s`;
 const options = (labels: Record<string, string>) => Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>);
 const hasAiImage = (scene: any) => scene.imageStatus === "READY" && scene.sceneImageAssetId;
 const makingImages = (video: any) => video.plan.scenes.some((scene: any) => scene.imageStatus === "GENERATING");
+// Words that can appear in a plan: shown on screen or spoken. Find and replace works on all of them.
+const PLAN_TEXT = ["title", "hookText", "voiceover", "ctaText"] as const;
+const SCENE_TEXT = ["caption", "voiceLine"] as const;
+const finder = (text: string) => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+const countIn = (plan: any, text: string) => !text ? 0 : [...PLAN_TEXT.map((field) => plan[field]), ...plan.scenes.flatMap((scene: any) => SCENE_TEXT.map((field) => scene[field]))]
+  .reduce((sum: number, value: unknown) => sum + (typeof value === "string" ? value.match(finder(text))?.length ?? 0 : 0), 0);
+const replaceIn = (plan: any, text: string, replacement: string) => {
+  const swap = (value: unknown) => typeof value === "string" ? value.replace(finder(text), () => replacement) : value;
+  return { ...plan, ...Object.fromEntries(PLAN_TEXT.map((field) => [field, swap(plan[field])])), scenes: plan.scenes.map((scene: any) => ({ ...scene, ...Object.fromEntries(SCENE_TEXT.filter((field) => typeof scene[field] === "string").map((field) => [field, swap(scene[field])])) })) };
+};
 
 /** Shows only the scene's own description; Copy gives the full prompt with the product rules in front. */
 function CopyPrompt({ label, text, rules }: Readonly<{ label: string; text?: string; rules: string }>) {
@@ -35,6 +45,9 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(-1);
+  const [find, setFind] = useState("");
+  const [replacement, setReplacement] = useState("");
+  const found = countIn(draft, find.trim());
   const set = (field: string, value: unknown) => setDraft((current: any) => ({ ...current, [field]: value }));
   const patchScene = (index: number, patch: Record<string, unknown>) => setDraft((current: any) => ({ ...current, scenes: current.scenes.map((scene: any, at: number) => at === index ? { ...scene, ...patch } : scene) }));
   // The clip is stored right away; it is attached to the scene when the plan is saved.
@@ -61,6 +74,14 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
     try { await api(`/api/videos/${video.id}/plan`, "PUT", draft); await onSaved(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not save the plan."); } finally { setSaving(false); }
   };
   return <article className="plan-card plan-editor">
+    <div className="find-replace">
+      <b>Find and replace</b><small className="muted">Changes the words everywhere in this plan: hook, voiceover, on-screen text of every scene and call to action.</small>
+      <div className="scene-row">
+        <label>Find<input value={find} placeholder="up to 6 dogs" onChange={(event) => setFind(event.target.value)} /></label>
+        <label>Replace with<input value={replacement} placeholder="up to 4 dogs" onChange={(event) => setReplacement(event.target.value)} /></label>
+      </div>
+      <div className="scene-row"><button type="button" disabled={!found} onClick={() => setDraft((current: any) => replaceIn(current, find.trim(), replacement))}>{find.trim() ? `Replace ${found} match${found === 1 ? "" : "es"}` : "Replace"}</button>{find.trim() && !found && <small className="muted">Not found in this plan.</small>}</div>
+    </div>
     <label>Title<input value={draft.title} maxLength={120} onChange={(event) => set("title", event.target.value)} /></label>
     <label>Hook (first 3s, on screen)<input value={draft.hookText} maxLength={60} onChange={(event) => set("hookText", event.target.value)} /></label>
     <label>Voiceover<textarea rows={4} value={draft.voiceover} maxLength={900} onChange={(event) => set("voiceover", event.target.value)} /></label>
@@ -74,6 +95,7 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
     <label>Voice delivery<input value={draft.voiceStyle ?? ""} maxLength={200} placeholder="excited, fast, like telling a friend" onChange={(event) => set("voiceStyle", event.target.value)} /></label>
     <b>Scenes</b>
     <ol className="scene-editor">{draft.scenes.map((scene: any, index: number) => <li key={index}>
+      <b className="scene-number">Scene {index + 1} · {seconds(scene.durationMs)}{scene.caption ? ` · "${scene.caption}"` : ""}</b>
       {scene.sceneImageAssetId
         ? <div className="scene-ai-image"><img src={`/api/assets/${scene.sceneImageAssetId}`} alt="AI scene" /><div><b>AI scene image</b><button type="button" onClick={() => setDraft((current: any) => ({ ...current, scenes: current.scenes.map((item: any, at: number) => at === index ? { ...item, sceneImageAssetId: undefined, imageStatus: undefined, imageError: undefined } : item) }))}>Use product photo instead</button></div></div>
         : <div className="scene-photos">{photos.map((photo: any) => <button type="button" key={photo.id} className={photo.id === scene.photoAssetId ? "chosen" : ""} title={photo.label} onClick={() => setScene(index, "photoAssetId", photo.id)}><img src={`/api/assets/${photo.id}`} alt={photo.label} /></button>)}</div>}
@@ -87,7 +109,7 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
           </div></>
         : <label className="upload-label">{uploading === index ? "Uploading…" : "Scene video from Kling (MP4, replaces the image)"}<input type="file" accept="video/mp4,video/quicktime,video/webm" disabled={uploading >= 0} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void uploadClip(index, file); }} /></label>}
       </div>
-      <label>Caption<input value={scene.caption} maxLength={80} onChange={(event) => setScene(index, "caption", event.target.value)} /></label>
+      <label>On-screen text (caption)<input value={scene.caption} maxLength={80} onChange={(event) => setScene(index, "caption", event.target.value)} /></label>
       <div className="scene-row">
         <label>Seconds<input type="number" min={1} max={15} step={0.5} value={scene.durationMs / 1000} onChange={(event) => setScene(index, "durationMs", Math.round(Math.min(15, Math.max(1, Number(event.target.value) || 1)) * 1000))} /></label>
         <label>Motion<select value={scene.motion} onChange={(event) => setScene(index, "motion", event.target.value)}>{Object.entries(motionLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>

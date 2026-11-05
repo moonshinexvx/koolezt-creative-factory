@@ -114,3 +114,4 @@
 .store-import{display:grid;grid-template-columns:1fr auto;gap:6px}
 .store-import input{min-width:0;padding:7px 8px;border:1px solid #b7c2d1;border-radius:6px;font:inherit;font-size:13px}
 .store-import button{font-size:13px;padding:6px 10px}
+.find-replace{display:grid;gap:4px;padding:10px 12px;margin-bottom:12px;border:1px solid #c9d6e6;border-radius:8px;background:#f2f7fd}.find-replace label{margin:4px 0}.scene-number{display:block;margin-bottom:6px;color:#123d70}
