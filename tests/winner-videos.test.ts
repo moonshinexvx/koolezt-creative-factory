@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { canonicalizeVideoPlan, CreativeDnaService, missingVoiceEnding, spreadScenePhotos, CreativeFactoryService, WinnerJobRunner, WinnerVideoService } from "@koolezt/application";
 import type { VideoRenderer } from "@koolezt/application";
 import { InMemoryCreativeDnaStore, InMemoryCreativeStrategyStore, InMemoryFactoryRepository, InMemoryWinnerJobStore, InMemoryWinnerVideoStore } from "@koolezt/infrastructure";
-import { FakeExternalMediaDeliveryProvider, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, MetadataMediaInspector, PlanVideoRenderer, buildPlanVideoArguments, planTimeline, wrapText } from "@koolezt/media";
+import { FakeExternalMediaDeliveryProvider, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, MetadataMediaInspector, PlanVideoRenderer, buildPlanVideoArguments, planTimeline, voiceTempoFor, wrapText } from "@koolezt/media";
 import { FakeCompositionProvider, FakeCreativeProvider, FakeSceneImageProvider, FakeVideoGenerationProvider, FakeVoiceProvider } from "@koolezt/providers";
 import { sceneImagePrompt } from "@koolezt/domain";
 import type { CreativeBrief, CreativeDnaPreprocessor } from "@koolezt/domain";
@@ -502,4 +502,13 @@ describe("winner to videos", () => {
       expect((await setup.videos.getVideo(video!.id)).status).toBe("READY");
     } finally { await setup.dispose(); }
   }, 120_000);
+
+  it("speeds a slightly long voiceover up to keep the chosen length, and never cuts words", () => {
+    expect(voiceTempoFor(12_000, 15_000)).toBe(1);
+    expect(voiceTempoFor(15_400, 15_000)).toBe(1.1);
+    // A 19-second voice for a 15-second video is sped up at most 1.2x; the video then runs a little long instead.
+    expect(voiceTempoFor(19_000, 15_000)).toBe(1.2);
+    const args = buildPlanVideoArguments({ scenes: [{ photoPath: "a.jpg", photoWidth: 100, photoHeight: 100, motion: "ZOOM_IN", caption: "", durationMs: 15_000 }], sceneMs: [15_000], totalMs: 15_000, voicePath: "v.mp3", outputPath: "o.mp4", fontPath: "f.ttf", textLayers: [], threads: 1, voiceTempo: 1.1 });
+    expect(args.join(" ")).toContain("atempo=1.100,adelay=");
+  });
 });

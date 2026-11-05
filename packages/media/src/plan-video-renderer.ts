@@ -21,6 +21,15 @@ const SPARE_FRAMES = 3;
 const STOP_MOTION_STEP = 4;
 const VOICE_LEAD_IN_MS = 300;
 const VOICE_TAIL_MS = 700;
+/** A voiceover that is too long for the chosen length is sped up by at most this much (pitch kept); beyond that the video gets longer, words are never cut. */
+const MAX_VOICE_TEMPO = 1.2;
+
+/** How much to speed up the voice so the video stays at its target length: 1 when it already fits. */
+export function voiceTempoFor(voiceDurationMs: number, targetDurationMs: number): number {
+  const room = targetDurationMs - VOICE_LEAD_IN_MS - VOICE_TAIL_MS;
+  if (voiceDurationMs <= room || room <= 0) return 1;
+  return Math.min(MAX_VOICE_TEMPO, Math.ceil((voiceDurationMs / room) * 1000) / 1000);
+}
 const CTA_MS = 2_500;
 const MOTION_ZOOM = 0.12;
 
@@ -83,7 +92,7 @@ type TextLayer = Readonly<{ file: string; fontSize: number; y: number; startMs: 
 /** Builds the FFmpeg argument list for one plan video. Pure: the caller writes the text files it references. */
 export function buildPlanVideoArguments(input: Readonly<{
   scenes: readonly PlanRenderScene[]; sceneMs: readonly number[]; totalMs: number; voicePath: string; outputPath: string;
-  fontPath: string; textLayers: readonly TextLayer[]; threads: number; style?: VideoPlanStyle; musicPath?: string;
+  fontPath: string; textLayers: readonly TextLayer[]; threads: number; style?: VideoPlanStyle; musicPath?: string; voiceTempo?: number;
 }>): string[] {
   const args = ["-hide_banner", "-loglevel", "error", "-y"];
   const last = input.scenes.length - 1;
@@ -143,7 +152,7 @@ export function buildPlanVideoArguments(input: Readonly<{
   const text = input.textLayers.map((layer) => `drawtext=fontfile='${font}':textfile='${filterPath(layer.file)}':fontcolor=${layer.color ?? "white"}:fontsize=${layer.fontSize}:x=(w-text_w)/2:y=${layer.y}${layer.border ? `:borderw=${layer.border}:bordercolor=black` : ""}${layer.box ? `:box=1:boxcolor=${layer.box}:boxborderw=22` : ""}:enable='between(t,${(layer.startMs / 1000).toFixed(3)},${(layer.endMs / 1000).toFixed(3)})'`);
   filters.push(`[${stream}]${text.length ? text.join(",") : "null"},trim=duration=${(input.totalMs / 1000).toFixed(3)}[v]`);
   const totalSec = (input.totalMs / 1000).toFixed(3);
-  const voice = `[${input.scenes.length}:a]adelay=${VOICE_LEAD_IN_MS}|${VOICE_LEAD_IN_MS},apad,atrim=0:${totalSec},afade=t=out:st=${Math.max(0, input.totalMs / 1000 - 0.4).toFixed(3)}:d=0.4`;
+  const voice = `[${input.scenes.length}:a]${input.voiceTempo && input.voiceTempo > 1 ? `atempo=${input.voiceTempo.toFixed(3)},` : ""}adelay=${VOICE_LEAD_IN_MS}|${VOICE_LEAD_IN_MS},apad,atrim=0:${totalSec},afade=t=out:st=${Math.max(0, input.totalMs / 1000 - 0.4).toFixed(3)}:d=0.4`;
   if (input.musicPath) {
     // Music sits quietly under the voice, fades in and out, and is looped or cut to the video length.
     filters.push(`${voice}[vo]`, `[${input.scenes.length + 1}:a]volume=${MUSIC_VOLUME},atrim=0:${totalSec},afade=t=in:st=0:d=0.6,afade=t=out:st=${Math.max(0, input.totalMs / 1000 - 1.2).toFixed(3)}:d=1.2[music]`, `[vo][music]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[a]`);
@@ -207,7 +216,8 @@ export class PlanVideoRenderer {
     if (!existsSync(fontPath)) throw new DomainError("VIDEO_RENDER_FONT_MISSING", `The caption font is missing: ${fontPath}`);
     const root = await mkdtemp(join(tmpdir(), "koolezt-plan-video-"));
     try {
-      const { totalMs, sceneMs } = planTimeline(input.scenes, input.targetDurationMs, input.voiceDurationMs);
+      const voiceTempo = voiceTempoFor(input.voiceDurationMs, input.targetDurationMs);
+      const { totalMs, sceneMs } = planTimeline(input.scenes, input.targetDurationMs, Math.ceil(input.voiceDurationMs / voiceTempo));
       const layers: TextLayer[] = [];
       const addText = async (name: string, value: string, maxChars: number, maxLines: number, base: Omit<TextLayer, "file" | "y"> & { y: number; lineHeight: number }) => {
         const lines = wrapText(value, maxChars, maxLines);
@@ -246,7 +256,7 @@ export class PlanVideoRenderer {
       }
       if (input.ctaText.trim()) await addText("cta", input.ctaText, 20, 2, { fontSize: 68, box: "0xE95B28@0.92", startMs: totalMs - CTA_MS, endMs: totalMs, y: Math.round(PLAN_VIDEO_HEIGHT * 0.78), lineHeight: 100 });
       const outputPath = join(root, "video.mp4");
-      const args = buildPlanVideoArguments({ scenes: input.scenes, sceneMs, totalMs, voicePath: input.voicePath, outputPath, fontPath, textLayers: layers, threads: this.options.threads ?? 2, ...(input.style ? { style: input.style } : {}), ...(input.musicPath ? { musicPath: input.musicPath } : {}) });
+      const args = buildPlanVideoArguments({ scenes: input.scenes, sceneMs, totalMs, voicePath: input.voicePath, outputPath, fontPath, textLayers: layers, threads: this.options.threads ?? 2, voiceTempo, ...(input.style ? { style: input.style } : {}), ...(input.musicPath ? { musicPath: input.musicPath } : {}) });
       const lowPriority = (this.options.lowPriority ?? true) && process.platform === "linux";
       // nice 19 + ionice idle: the kernel serves every other process first.
       if (lowPriority) await runProcess("nice", ["-n", "19", "ionice", "-c", "3", this.ffmpeg, ...args], this.options.timeoutMs ?? 600_000);

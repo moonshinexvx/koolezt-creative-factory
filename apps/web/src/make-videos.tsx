@@ -39,8 +39,17 @@ function CopyPrompt({ label, text, rules }: Readonly<{ label: string; text?: str
   return <div className="scene-prompt"><div><b>{label}</b><button type="button" title="Copies the full prompt including the product rules" onClick={() => void navigator.clipboard.writeText(`${rules}\n\nScene: ${text}`).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button></div><p>{text}</p></div>;
 }
 
+/** Word count against the video length: about 2 words a second fit; a bit more is sped up slightly, more than that makes the video longer. */
+function VoiceLength({ text, targetMs }: Readonly<{ text: string; targetMs: number }>) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  const seconds = Math.round(targetMs / 1000);
+  const fits = seconds * 2;
+  const tone = words <= fits ? "muted" : words <= Math.round(fits * 1.2) ? "warning" : "error";
+  return <small className={`voice-length ${tone}`}>{words} words · {seconds}s video fits about {fits}.{words > fits && (words <= Math.round(fits * 1.2) ? " The voice will be sped up slightly to fit." : ` Too long: the video will run about ${Math.round((words / 2.3 / 1.2) + 1)}s. Shorten it to keep ${seconds}s.`)}</small>;
+}
+
 /** Lets the owner change a plan before making it: photo, caption, length and motion of each scene, scene order, and the words. */
-function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any; photos: readonly any[]; onSaved: () => Promise<void>; onCancel: () => void }>) {
+function PlanEditor({ video, photos, targetMs, onSaved, onCancel }: Readonly<{ video: any; photos: readonly any[]; targetMs: number; onSaved: () => Promise<void>; onCancel: () => void }>) {
   const [draft, setDraft] = useState<any>(() => structuredClone(video.plan));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -84,7 +93,8 @@ function PlanEditor({ video, photos, onSaved, onCancel }: Readonly<{ video: any;
     </div>
     <label>Title<input value={draft.title} maxLength={120} onChange={(event) => set("title", event.target.value)} /></label>
     <label>Hook (first 3s, on screen)<input value={draft.hookText} maxLength={60} onChange={(event) => set("hookText", event.target.value)} /></label>
-    <label>Voiceover<textarea rows={4} value={draft.voiceover} maxLength={900} onChange={(event) => set("voiceover", event.target.value)} /></label>
+    <label>Voiceover<textarea rows={4} value={draft.voiceover} maxLength={900} onChange={(event) => set("voiceover", event.target.value)} />
+      <VoiceLength text={draft.voiceover} targetMs={targetMs} /></label>
     <label>Call to action (last scene)<input value={draft.ctaText} maxLength={40} onChange={(event) => set("ctaText", event.target.value)} /></label>
     <div className="scene-row">
       <label>Style<select value={draft.style ?? "PHOTO_MOTION"} onChange={(event) => set("style", event.target.value)}>{options(styleLabel)}</select></label>
@@ -312,7 +322,7 @@ export function MakeVideos({ referenceId, winnerProductId, productId, reportRead
       <button type="button" onClick={() => { setOpen(""); setEditing(""); }}>Close</button>
     </div></div>
     {editing === openEntry.video.id
-      ? <PlanEditor key={openEntry.video.id} video={openEntry.video} photos={photosOf(openEntry.batch.productId)} onCancel={() => setEditing("")} onSaved={async () => { setEditing(""); await load(); }} />
+      ? <PlanEditor key={openEntry.video.id} video={openEntry.video} photos={photosOf(openEntry.batch.productId)} targetMs={openEntry.batch.targetDurationMs} onCancel={() => setEditing("")} onSaved={async () => { setEditing(""); await load(); }} />
       : <PlanCard key={openEntry.video.id} video={openEntry.video} working={working} selected={selected.includes(openEntry.video.id)} onEdit={() => setEditing(openEntry.video.id)} onWriteAdCopy={() => void run(() => api(`/api/videos/${openEntry.video.id}/ad-copy`, "POST", {}), "Could not write the ad copy.")} onSaveAdCopy={(copy) => void run(() => api(`/api/videos/${openEntry.video.id}/ad-copy`, "PUT", copy), "Could not save the ad copy.")} onSceneImages={(scenes) => void run(() => api(`/api/videos/${openEntry.video.id}/scene-images`, "POST", scenes ? { scenes } : {}), "Could not start the AI scene images.")} onToggle={() => toggle(openEntry.video.id)} />}
   </div>;
 

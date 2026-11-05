@@ -115,3 +115,4 @@
 .store-import input{min-width:0;padding:7px 8px;border:1px solid #b7c2d1;border-radius:6px;font:inherit;font-size:13px}
 .store-import button{font-size:13px;padding:6px 10px}
 .find-replace{display:grid;gap:4px;padding:10px 12px;margin-bottom:12px;border:1px solid #c9d6e6;border-radius:8px;background:#f2f7fd}.find-replace label{margin:4px 0}.scene-number{display:block;margin-bottom:6px;color:#123d70}
+.voice-length{font-weight:500}.voice-length.warning{color:#8a5a00}.voice-length.error{color:#8a1717;font-weight:650}
