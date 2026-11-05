@@ -16,6 +16,12 @@ const runJobs = async () => {
     jobLoopRunning = false;
   }
 };
+// Renders cut off by a restart start again at once; the loop waits until that is done.
+jobLoopRunning = true;
+void runtime.winnerJobRunner.resumeInterruptedRenders()
+  .then((count) => { if (count) console.log("resumed interrupted video renders", { count }); })
+  .catch((error) => console.error("could not resume interrupted renders", { errorName: error instanceof Error ? error.name : "UnknownError" }))
+  .finally(() => { jobLoopRunning = false; });
 const jobTimer = setInterval(() => void runJobs(), Number(process.env.WINNER_JOB_POLL_MS ?? "3000"));
 
 let cleanupRunning = false;

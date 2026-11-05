@@ -349,6 +349,8 @@ export interface WinnerJobRepository {
   claimNext(now: string, staleAfterMs: number): Promise<WinnerJob | undefined>;
   finish(id: string, outcome: Readonly<{ status: "COMPLETED" | "FAILED" | "PENDING"; lastError?: string; nextAttemptAt?: string }>, timestamp: string): Promise<void>;
   list(targetId?: string): Promise<readonly WinnerJob[]>;
+  /** Puts RUNNING jobs of these kinds back to PENDING (run once at worker start, when nothing can still be running them); returns how many. */
+  releaseRunning(kinds: readonly WinnerJob["kind"][], timestamp: string): Promise<number>;
 }
 
 export const VIDEO_PLAN_MOTIONS = ["ZOOM_IN", "ZOOM_OUT", "PAN_LEFT", "PAN_RIGHT"] as const;

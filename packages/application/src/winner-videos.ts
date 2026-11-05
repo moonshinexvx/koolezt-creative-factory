@@ -581,6 +581,14 @@ export class WinnerJobRunner {
   private running = false;
   constructor(private readonly d: Readonly<{ jobs: WinnerJobRepository; handlers: Readonly<Record<WinnerJob["kind"], (job: WinnerJob) => Promise<JobOutcome>>>; staleAfterMs?: number; now?: () => Date }>) {}
 
+  /**
+   * Called once when the worker starts: a video render that was RUNNING was cut off by the restart, so it starts again
+   * right away instead of waiting to go stale. Paid AI jobs (analysis, briefs, scripts, AI images) are left alone.
+   */
+  async resumeInterruptedRenders(): Promise<number> {
+    return this.d.jobs.releaseRunning(["RENDER_VIDEO"], (this.d.now ?? (() => new Date()))().toISOString());
+  }
+
   /** Returns true when a job was processed, so the caller can loop until the queue is empty. */
   async runOnce(): Promise<boolean> {
     if (this.running) return false;

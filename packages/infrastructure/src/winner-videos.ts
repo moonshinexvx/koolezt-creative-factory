@@ -43,6 +43,10 @@ export class PostgresWinnerJobStore implements WinnerJobRepository {
     const q = await this.pool.query("SELECT * FROM winner_jobs WHERE ($1::uuid IS NULL OR target_id=$1) ORDER BY created_at DESC LIMIT 200", [targetId ?? null]);
     return q.rows.map(mapJob);
   }
+  async releaseRunning(kinds: readonly WinnerJob["kind"][], timestamp: string): Promise<number> {
+    const q = await this.pool.query("UPDATE winner_jobs SET status='PENDING', next_attempt_at=NULL, last_error='Interrupted by a worker restart; starting again.', updated_at=$2 WHERE status='RUNNING' AND kind = ANY($1::text[])", [kinds, timestamp]);
+    return q.rowCount ?? 0;
+  }
 }
 
 export class PostgresWinnerVideoStore implements WinnerVideoRepository {
@@ -122,6 +126,15 @@ export class InMemoryWinnerJobStore implements WinnerJobRepository {
   }
   async list(targetId?: string): Promise<readonly WinnerJob[]> {
     return [...this.jobs.values()].filter((job) => !targetId || job.targetId === targetId).map((job) => structuredClone(job));
+  }
+  async releaseRunning(kinds: readonly WinnerJob["kind"][], timestamp: string): Promise<number> {
+    const interrupted = [...this.jobs.values()].filter((job) => job.status === "RUNNING" && kinds.includes(job.kind));
+    for (const job of interrupted) {
+      const { nextAttemptAt: _n, ...rest } = job;
+      void _n;
+      this.jobs.set(job.id, { ...rest, status: "PENDING", lastError: "Interrupted by a worker restart; starting again.", updatedAt: timestamp });
+    }
+    return interrupted.length;
   }
 }
 

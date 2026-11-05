@@ -453,4 +453,20 @@ describe("winner to videos", () => {
     expect(VIDEO_SCRIPT_INSTRUCTIONS(3, 15, "PHOTO_MOTION", "NONE")).toContain("keepsFromWinner names the proven ad pattern");
     expect(CREATIVE_BRIEF_INSTRUCTIONS(3, "PHOTO_MOTION")).not.toContain("Borrow only");
   });
+
+  it("starts a render cut off by a worker restart again at once, but never re-runs paid AI jobs", async () => {
+    const jobs = new InMemoryWinnerJobStore();
+    const now = new Date().toISOString();
+    for (const [id, kind] of [["r", "RENDER_VIDEO"], ["b", "WRITE_CREATIVE_BRIEF"]] as const) {
+      await jobs.enqueue({ id, kind, targetId: crypto.randomUUID(), operationKey: id, status: "PENDING", attempts: 0, createdAt: now, updatedAt: now });
+    }
+    await jobs.claimNext(now, 60_000);
+    await jobs.claimNext(now, 60_000);
+    const seen: string[] = [];
+    const runner = new WinnerJobRunner({ jobs, handlers: { RENDER_VIDEO: async (job: { kind: string }) => { seen.push(job.kind); return { status: "COMPLETED" }; }, WRITE_CREATIVE_BRIEF: async (job: { kind: string }) => { seen.push(job.kind); return { status: "COMPLETED" }; } } as never });
+    expect(await runner.resumeInterruptedRenders()).toBe(1);
+    while (await runner.runOnce()) { /* drain */ }
+    expect(seen).toEqual(["RENDER_VIDEO"]);
+    expect((await jobs.list()).find((job) => job.id === "b")!.status).toBe("RUNNING");
+  });
 });
