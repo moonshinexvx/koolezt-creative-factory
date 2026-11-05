@@ -190,6 +190,16 @@ export class PlanVideoRenderer {
     return { ...(stream ? { width: Number(stream.width), height: Number(stream.height) } : {}), ...(Number.isFinite(duration) ? { durationMs: Math.round(duration * 1000) } : {}) };
   }
 
+  /** Joins voice clips into one mono WAV with a short pause between them. */
+  async joinAudio(paths: readonly string[], outputPath: string): Promise<string> {
+    const inputs = paths.flatMap((path) => ["-i", path]);
+    const parts = paths.map((_, index) => `[${index}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=mono[a${index}]`);
+    const gaps = paths.slice(1).map((_, index) => `anullsrc=r=48000:cl=mono,atrim=0:0.25,aformat=sample_fmts=fltp[g${index}]`);
+    const order = paths.map((_, index) => index === 0 ? "[a0]" : `[g${index - 1}][a${index}]`).join("");
+    await runProcess(this.ffmpeg, ["-hide_banner", "-loglevel", "error", ...inputs, "-filter_complex", `${[...parts, ...gaps].join(";")};${order}concat=n=${paths.length * 2 - 1}:v=0:a=1[out]`, "-map", "[out]", "-y", outputPath], 60_000);
+    return outputPath;
+  }
+
   /** Renders to MP4 bytes. On Linux FFmpeg runs at the lowest CPU and disk priority so other services always come first. */
   async render(input: PlanRenderInput): Promise<Readonly<{ bytes: Uint8Array; durationMs: number }>> {
     if (!input.scenes.length) throw new DomainError("VIDEO_PLAN_INVALID", "A video needs at least one scene.");

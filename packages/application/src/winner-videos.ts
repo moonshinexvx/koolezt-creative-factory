@@ -3,7 +3,7 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
 import { DomainError, HOOK_TYPES, META_CTA_BUTTONS, MUSIC_MOODS, REVIEW_CHECKS, sceneImagePrompt, VIDEO_CAPTION_STYLES, VIDEO_FORMATS, VIDEO_PLAN_MOTIONS, VIDEO_PLAN_STYLES, VIDEO_TRANSITIONS, VOICE_NAMES } from "@koolezt/domain";
-import type { CreativeBrief, MetaAdCopy, CreativeDnaRepository, CreativeProvider, FactoryRepository, SceneImageProvider, StorageProvider, VideoCaptionStyle, VideoPlan, VideoPlanInput, VideoPlanMotion, VideoPlanScene, VideoPlanStyle, VideoTransition, VoiceProvider, WinnerJob, WinnerJobRepository, WinnerVideo, WinnerVideoBatch, WinnerVideoRepository } from "@koolezt/domain";
+import type { CreativeBrief, CreativeDnaTranscriber, MetaAdCopy, CreativeDnaRepository, CreativeProvider, FactoryRepository, SceneImageProvider, StorageProvider, VideoCaptionStyle, VideoPlan, VideoPlanInput, VideoPlanMotion, VideoPlanScene, VideoPlanStyle, VideoTransition, VoiceProvider, WinnerJob, WinnerJobRepository, WinnerVideo, WinnerVideoBatch, WinnerVideoRepository } from "@koolezt/domain";
 
 /** The renderer the service needs; implemented by PlanVideoRenderer in @koolezt/media. */
 export interface VideoRenderer {
@@ -13,12 +13,37 @@ export interface VideoRenderer {
     hookText: string; ctaText: string; voicePath: string; voiceDurationMs: number; targetDurationMs: number; style?: VideoPlanStyle;
     captionStyle?: VideoCaptionStyle; musicPath?: string;
   }>): Promise<Readonly<{ bytes: Uint8Array; durationMs: number }>>;
+  /** Joins audio files one after another with a short pause between them; returns the joined file's path. */
+  joinAudio?(paths: readonly string[], outputPath: string): Promise<string>;
 }
 
 export type JobOutcome = Readonly<{ status: "COMPLETED" | "FAILED" | "PENDING"; lastError?: string; nextAttemptAt?: string }>;
 
 const MAX_PHOTOS = 12;
 const MAX_RENDER_ATTEMPTS = 4;
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+const spokenWords = (value: string) => value.toLowerCase().replace(/[’']/g, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+  .map((word) => NUMBER_WORDS.includes(word) ? String(NUMBER_WORDS.indexOf(word)) : word);
+
+/**
+ * Text-to-speech models sometimes stop early and skip the last sentence (often the call to action). Compares the script
+ * with what was actually heard and returns the trailing sentences that are missing, or nothing when the ending is there.
+ */
+export function missingVoiceEnding(script: string, heard: string): string | undefined {
+  const sentences = (script.match(/[^.!?]+[.!?]*/g) ?? []).map((sentence) => sentence.trim()).filter((sentence) => spokenWords(sentence).length);
+  const transcript = spokenWords(heard);
+  if (sentences.length < 2 || !transcript.length) return undefined;
+  const missing: string[] = [];
+  let end = transcript.length;
+  for (let index = sentences.length - 1; index > 0; index--) {
+    const words = spokenWords(sentences[index]!);
+    // The sentence should be among the last words heard (a little slack for words the transcript writes differently).
+    const tail = new Set(transcript.slice(Math.max(0, end - words.length - 3), end));
+    if (words.filter((word) => tail.has(word)).length / words.length >= 0.5) break;
+    missing.unshift(sentences[index]!);
+  }
+  return missing.length ? missing.join(" ") : undefined;
+}
 const SCENE_IMAGE_CONCURRENCY = 4;
 /** The scene without its AI image state (status, error, and the image itself). */
 const plainScene = (scene: VideoPlanScene): VideoPlanScene => {
@@ -185,6 +210,8 @@ export class WinnerVideoService {
   constructor(private readonly d: Readonly<{
     repository: FactoryRepository; dna: CreativeDnaRepository; videos: WinnerVideoRepository; jobs: WinnerJobRepository;
     provider: CreativeProvider; voice: VoiceProvider; storage: StorageProvider; renderer: VideoRenderer; sceneImages?: SceneImageProvider;
+    /** Optional: listens to each voiceover so a sentence the voice model skipped at the end can be added back. */
+    transcriber?: CreativeDnaTranscriber;
     /** Folder with one subfolder per music mood (upbeat, warm, emotional, calm) holding licensed tracks; videos have no music without it. */
     musicRoot?: string;
     voiceProfileId?: string; maxLoadAverage?: number; loadAverage?: () => number; now?: () => Date; id?: () => string;
@@ -522,8 +549,20 @@ export class WinnerVideoService {
       const submission = await this.d.voice.submit({ voiceProfileId: video.plan.voice ?? this.d.voiceProfileId ?? "default", script: video.plan.voiceover, ...(video.plan.voiceStyle ? { instructions: `${video.plan.voiceStyle}. Natural social-media ad read.` } : {}) }, { operationKey: `voice:${video.id}:${job.id}`, projectId: batch.productId, targetId: video.id });
       const voiceResult = await this.d.voice.getStatus(submission.providerTaskId);
       if (voiceResult.state !== "SUCCEEDED") throw new DomainError("VIDEO_VOICE_FAILED", voiceResult.state === "FAILED" ? voiceResult.message : "The voiceover is not ready.");
-      const voiceFile = `${voicePath}.${voiceResult.result.extension}`;
+      let voiceFile = `${voicePath}.${voiceResult.result.extension}`;
       await writeFile(voiceFile, voiceResult.result.bytes);
+      const ending = await this.skippedEnding(video.plan.voiceover, voiceResult.result);
+      if (ending && this.d.renderer.joinAudio) {
+        // Only the missing sentence is spoken again, with the same voice and delivery, and added to the end.
+        const extra = await this.d.voice.submit({ voiceProfileId: video.plan.voice ?? this.d.voiceProfileId ?? "default", script: ending, ...(video.plan.voiceStyle ? { instructions: `${video.plan.voiceStyle}. Natural social-media ad read.` } : {}) }, { operationKey: `voice-ending:${video.id}:${job.id}`, projectId: batch.productId, targetId: video.id });
+        const extraResult = await this.d.voice.getStatus(extra.providerTaskId);
+        if (extraResult.state === "SUCCEEDED") {
+          const extraFile = join(root, `voice-ending.${extraResult.result.extension}`);
+          await writeFile(extraFile, extraResult.result.bytes);
+          voiceFile = await this.d.renderer.joinAudio([voiceFile, extraFile], join(root, "voice-full.wav"));
+          console.log("voiceover ending was skipped by the voice model; added it back", { videoId: video.id, words: ending.split(/\s+/).length });
+        }
+      }
       const voiceDurationMs = (await this.d.renderer.probe(voiceFile)).durationMs ?? 0;
       const scenes = [];
       for (const [index, scene] of video.plan.scenes.entries()) {
@@ -567,6 +606,18 @@ export class WinnerVideoService {
     if (!tracks.length) return undefined;
     const pick = [...video.id].reduce((sum, char) => sum + char.charCodeAt(0), 0) % tracks.length;
     return join(folder, tracks[pick]!);
+  }
+
+  /** What the voice model skipped at the end of the script, if anything; any transcription problem means no check. */
+  private async skippedEnding(script: string, audio: Readonly<{ bytes: Uint8Array; mimeType: string; extension: string }>): Promise<string | undefined> {
+    if (!this.d.transcriber || audio.mimeType !== "audio/mpeg") return undefined;
+    try {
+      const heard = await this.d.transcriber.transcribe({ bytes: audio.bytes, mimeType: "audio/mpeg", fileName: `voice.${audio.extension}`, durationMs: 0 });
+      return missingVoiceEnding(script, heard.text);
+    } catch (error) {
+      console.warn("voiceover check skipped", { errorName: error instanceof Error ? error.name : "UnknownError" });
+      return undefined;
+    }
   }
 
   /** Sets for one winner, or (with productId) the sets made from that product alone, or all sets. */

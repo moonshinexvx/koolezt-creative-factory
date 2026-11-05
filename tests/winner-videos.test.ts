@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { canonicalizeVideoPlan, CreativeDnaService, spreadScenePhotos, CreativeFactoryService, WinnerJobRunner, WinnerVideoService } from "@koolezt/application";
+import { canonicalizeVideoPlan, CreativeDnaService, missingVoiceEnding, spreadScenePhotos, CreativeFactoryService, WinnerJobRunner, WinnerVideoService } from "@koolezt/application";
 import type { VideoRenderer } from "@koolezt/application";
 import { InMemoryCreativeDnaStore, InMemoryCreativeStrategyStore, InMemoryFactoryRepository, InMemoryWinnerJobStore, InMemoryWinnerVideoStore } from "@koolezt/infrastructure";
 import { FakeExternalMediaDeliveryProvider, InlineCompositionOutputIngestor, LocalReadyPublisher, LocalStorageProvider, MetadataMediaInspector, PlanVideoRenderer, buildPlanVideoArguments, planTimeline, wrapText } from "@koolezt/media";
@@ -469,4 +469,37 @@ describe("winner to videos", () => {
     expect(seen).toEqual(["RENDER_VIDEO"]);
     expect((await jobs.list()).find((job) => job.id === "b")!.status).toBe("RUNNING");
   });
+
+  it("finds the sentences the voice model skipped at the end of the script", () => {
+    const script = "One dog? Easy. Two? Still easy. Three? We've got room. Pick from over 100 breeds, plus your number and street. Up to four dogs. Nobody left off. Customize yours today.";
+    // What the voice actually said in the Zero Favorites video: everything but the call to action.
+    expect(missingVoiceEnding(script, "One dog? Easy. Two? Still easy. Three? We've got room. Pick from over 100 breeds plus your number and street. Up to 4 dogs. Nobody left off.")).toBe("Customize yours today.");
+    expect(missingVoiceEnding(script, "One dog, easy. Two, still easy. Three, we've got room. Pick from over a hundred breeds plus your number and street. Up to four dogs. Nobody left off. Customize yours today!")).toBeUndefined();
+    expect(missingVoiceEnding(script, "One dog? Easy. Two? Still easy. Three? We've got room. Pick from over 100 breeds, plus your number and street.")).toBe("Up to four dogs. Nobody left off. Customize yours today.");
+    expect(missingVoiceEnding("Just one line.", "")).toBeUndefined();
+  });
+
+  it("adds a skipped call to action back to the voiceover and joins the audio for real", async () => {
+    const renderer = new PlanVideoRenderer({ ffmpegPath: ffmpeg, ffprobePath: ffprobe });
+    const setup = await harness({ renderer });
+    try {
+      await setup.dnaService.requestAnalysis(setup.reference.id, crypto.randomUUID());
+      await setup.drain();
+      const batch = await setup.service.requestPlans({ referenceId: setup.reference.id, count: 3, durationSeconds: 15, actor: "owner" });
+      await setup.drain();
+      const [video] = await setup.videos.listVideos(batch.id);
+      const voiceover = "Your dog greets everyone. Now your door does too. Customize yours today.";
+      await setup.service.editPlan(video!.id, { ...video!.plan, voiceover });
+      const transcribe = vi.fn(async () => ({ provider: "openai", model: "whisper-1", text: "Your dog greets everyone. Now your door does too.", segments: [] }));
+      (setup.service as unknown as { d: Record<string, unknown> }).d.transcriber = { transcribe };
+      const submit = vi.spyOn((setup.service as unknown as { d: { voice: { submit: (...args: unknown[]) => unknown } } }).d.voice, "submit");
+      const joinAudio = vi.spyOn(renderer, "joinAudio");
+      await setup.service.makeVideos(batch.id, [video!.id]);
+      await setup.drain();
+      expect(transcribe).toHaveBeenCalledTimes(1);
+      expect(submit.mock.calls.map(([input]) => (input as { script: string }).script)).toEqual([voiceover, "Customize yours today."]);
+      expect(joinAudio).toHaveBeenCalledTimes(1);
+      expect((await setup.videos.getVideo(video!.id)).status).toBe("READY");
+    } finally { await setup.dispose(); }
+  }, 120_000);
 });
