@@ -39,6 +39,23 @@ function CopyPrompt({ label, text, rules }: Readonly<{ label: string; text?: str
   return <div className="scene-prompt"><div><b>{label}</b><button type="button" title="Copies the full prompt including the product rules" onClick={() => void navigator.clipboard.writeText(`${rules}\n\nScene: ${text}`).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button></div><p>{text}</p></div>;
 }
 
+/** Posts a form with upload progress (fetch cannot report it); resolves with the JSON answer. */
+function postWithProgress(url: string, form: FormData, onProgress: (percent: number) => void): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", url);
+    request.setRequestHeader("x-koolezt-actor", "web-user");
+    request.upload.onprogress = (event) => { if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100)); };
+    request.onerror = () => reject(new Error("Upload failed. Check the connection and try again."));
+    request.onload = () => {
+      let json: any = {};
+      try { json = JSON.parse(request.responseText); } catch { /* not JSON */ }
+      if (request.status >= 200 && request.status < 300) resolve(json); else reject(new Error(json.message ?? "Upload failed."));
+    };
+    request.send(form);
+  });
+}
+
 /** Word count against the video length: about 2 words a second fit; a bit more is sped up slightly, more than that makes the video longer. */
 function VoiceLength({ text, targetMs }: Readonly<{ text: string; targetMs: number }>) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
@@ -54,6 +71,7 @@ function PlanEditor({ video, photos, targetMs, onSaved, onCancel }: Readonly<{ v
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(-1);
+  const [uploadPercent, setUploadPercent] = useState(0);
   const [find, setFind] = useState("");
   const [replacement, setReplacement] = useState("");
   const found = countIn(draft, find.trim());
@@ -61,13 +79,11 @@ function PlanEditor({ video, photos, targetMs, onSaved, onCancel }: Readonly<{ v
   const patchScene = (index: number, patch: Record<string, unknown>) => setDraft((current: any) => ({ ...current, scenes: current.scenes.map((scene: any, at: number) => at === index ? { ...scene, ...patch } : scene) }));
   // The clip is stored right away; it is attached to the scene when the plan is saved.
   const uploadClip = async (index: number, file: File) => {
-    setUploading(index); setError("");
+    setUploading(index); setUploadPercent(0); setError("");
     try {
       const form = new FormData();
       form.append("file", file);
-      const response = await fetch(`/api/videos/${video.id}/scene-clips`, { method: "POST", headers: { "x-koolezt-actor": "web-user" }, body: form });
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.message ?? "Upload failed.");
+      const json = await postWithProgress(`/api/videos/${video.id}/scene-clips`, form, setUploadPercent);
       patchScene(index, { sceneVideoAssetId: json.assetId, videoDurationMs: json.durationMs, videoStartMs: 0 });
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Upload failed."); } finally { setUploading(-1); }
   };
@@ -117,7 +133,7 @@ function PlanEditor({ video, photos, targetMs, onSaved, onCancel }: Readonly<{ v
             <small className="muted">Uses {seconds(scene.durationMs)} of this {seconds(scene.videoDurationMs ?? 0)} clip, from {seconds(scene.videoStartMs ?? 0)}.{(scene.videoStartMs ?? 0) + scene.durationMs > (scene.videoDurationMs ?? Infinity) ? " The clip ends early; its last frame is held." : ""}</small>
             <button type="button" onClick={() => patchScene(index, { sceneVideoAssetId: undefined, videoStartMs: undefined, videoDurationMs: undefined })}>Remove video</button>
           </div></>
-        : <label className="upload-label">{uploading === index ? "Uploading…" : "Scene video from Kling (MP4, replaces the image)"}<input type="file" accept="video/mp4,video/quicktime,video/webm" disabled={uploading >= 0} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void uploadClip(index, file); }} /></label>}
+        : <label className="upload-label">{uploading === index ? (uploadPercent < 100 ? `Uploading… ${uploadPercent}%` : "Saving…") : "Scene video from Kling (MP4, replaces the image)"}<input type="file" accept="video/mp4,video/quicktime,video/webm" disabled={uploading >= 0} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void uploadClip(index, file); }} /></label>}
       </div>
       <label>On-screen text (caption)<input value={scene.caption} maxLength={80} onChange={(event) => setScene(index, "caption", event.target.value)} /></label>
       <div className="scene-row">

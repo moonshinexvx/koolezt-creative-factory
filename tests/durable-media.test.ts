@@ -64,6 +64,14 @@ describe("S3 durable media store", () => {
     expect(send.mock.calls.map(([command]) => command.constructor.name)).toEqual(["HeadObjectCommand", "GetObjectCommand"]);
   });
 
+  it("stores server-made media with a Content-MD5 check and does not download it back", async () => {
+    const { store, send } = setup();
+    const asset = await store.put("ignored", { bytes, mimeType: "video/mp4", extension: "mp4", metadata: { projectId, purpose: "SCENE_VIDEO" } });
+    expect(asset.lifecycleStatus).toBe("AVAILABLE");
+    expect(send.mock.calls.map(([command]) => command.constructor.name)).toEqual(["PutObjectCommand", "HeadObjectCommand"]);
+    expect((send.mock.calls[0]![0] as { input: { ContentMD5: string } }).input.ContentMD5).toBe(createHash("md5").update(bytes).digest("base64"));
+  });
+
   it("rejects checksum mismatch and never marks the object AVAILABLE", async () => {
     const { store, catalog, send } = setup();
     const target = await store.createUpload({ projectId, purpose: "SCENE_VIDEO", kind: "VIDEO", mimeType: "video/mp4", extension: "mp4", byteSize: bytes.byteLength, sha256: checksum });

@@ -149,6 +149,15 @@ export class S3DurableMediaStore implements DurableMediaStore {
   }
 
   async completeUpload(assetId: string): Promise<GeneratedAsset> {
+    return this.verifyUpload(assetId, true);
+  }
+
+  /**
+   * Marks an uploaded object AVAILABLE after checking its size and metadata. Bytes that came from a browser are also
+   * downloaded and hashed; bytes the server sent itself were already checked by S3 on arrival (Content-MD5), so
+   * downloading them again would only double the transfer time.
+   */
+  private async verifyUpload(assetId: string, readBack: boolean): Promise<GeneratedAsset> {
     const pending = await this.catalog.get(assetId, true);
     if (!pending) throw new DomainError("ASSET_NOT_FOUND", "Durable media asset was not found.");
     if (pending.storageProvider !== "s3") throw new DomainError("DURABLE_MEDIA_PROVIDER_MISMATCH", "Asset is not stored by the S3 durable store.");
@@ -156,8 +165,8 @@ export class S3DurableMediaStore implements DurableMediaStore {
     safeKey(pending.storageKey);
     try {
       const head = await this.client.send(new HeadObjectCommand({ Bucket: this.config.bucket, Key: pending.storageKey }));
-      const authoritativeBytes = await this.read(pending.storageKey);
-      if (Number(head.ContentLength ?? -1) !== pending.byteSize || authoritativeBytes.byteLength !== pending.byteSize || digest(authoritativeBytes) !== pending.sha256 || head.Metadata?.sha256 !== pending.sha256 || head.Metadata?.["asset-id"] !== pending.id) {
+      const authoritativeBytes = readBack ? await this.read(pending.storageKey) : undefined;
+      if (Number(head.ContentLength ?? -1) !== pending.byteSize || (authoritativeBytes && (authoritativeBytes.byteLength !== pending.byteSize || digest(authoritativeBytes) !== pending.sha256)) || head.Metadata?.sha256 !== pending.sha256 || head.Metadata?.["asset-id"] !== pending.id) {
         await this.catalog.markFailed(assetId, "Object size or checksum metadata mismatch.");
         throw new DomainError("DURABLE_MEDIA_VERIFICATION_FAILED", "Uploaded object does not match its durable asset claim.");
       }
@@ -195,9 +204,11 @@ export class S3DurableMediaStore implements DurableMediaStore {
         Key: target.asset.storageKey,
         Body: payload.bytes,
         ContentType: payload.mimeType,
+        // S3 rejects the upload if the bytes it received do not match.
+        ContentMD5: createHash("md5").update(payload.bytes).digest("base64"),
         Metadata: { "asset-id": target.asset.id, sha256: target.asset.sha256 }
       }));
-      return await this.completeUpload(target.asset.id);
+      return await this.verifyUpload(target.asset.id, false);
     } catch (error) {
       await this.catalog.markFailed(target.asset.id, error instanceof DomainError ? error.code : "S3 durable upload failed.");
       throw error;
