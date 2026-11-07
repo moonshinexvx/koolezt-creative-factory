@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "./api.js";
 
@@ -70,22 +70,45 @@ function PlanEditor({ video, photos, targetMs, onSaved, onCancel }: Readonly<{ v
   const [draft, setDraft] = useState<any>(() => structuredClone(video.plan));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [uploading, setUploading] = useState(-1);
-  const [uploadPercent, setUploadPercent] = useState(0);
+  // Clip uploads run in the background, two at a time, while the owner keeps editing: scene index -> percent.
+  const [uploads, setUploads] = useState<Record<number, number>>({});
+  const pending = useRef<Promise<void>[]>([]);
+  const slots = useRef(0);
+  const waiting = useRef<(() => void)[]>([]);
+  const latest = useRef<any>(draft);
+  latest.current = draft;
+  const uploadCount = Object.keys(uploads).length;
   const [find, setFind] = useState("");
   const [replacement, setReplacement] = useState("");
   const found = countIn(draft, find.trim());
   const set = (field: string, value: unknown) => setDraft((current: any) => ({ ...current, [field]: value }));
   const patchScene = (index: number, patch: Record<string, unknown>) => setDraft((current: any) => ({ ...current, scenes: current.scenes.map((scene: any, at: number) => at === index ? { ...scene, ...patch } : scene) }));
-  // The clip is stored right away; it is attached to the scene when the plan is saved.
-  const uploadClip = async (index: number, file: File) => {
-    setUploading(index); setUploadPercent(0); setError("");
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const json = await postWithProgress(`/api/videos/${video.id}/scene-clips`, form, setUploadPercent);
-      patchScene(index, { sceneVideoAssetId: json.assetId, videoDurationMs: json.durationMs, videoStartMs: 0 });
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Upload failed."); } finally { setUploading(-1); }
+  // Each clip is stored right away and attached to its scene in the draft; Save plan waits for uploads still running.
+  const uploadClip = (index: number, file: File) => {
+    setUploads((current) => ({ ...current, [index]: 0 })); setError("");
+    const task = (async () => {
+      if (slots.current >= 2) await new Promise<void>((resolve) => waiting.current.push(resolve));
+      slots.current++;
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const json = await postWithProgress(`/api/videos/${video.id}/scene-clips`, form, (percent) => setUploads((current) => ({ ...current, [index]: percent })));
+        patchScene(index, { sceneVideoAssetId: json.assetId, videoDurationMs: json.durationMs, videoStartMs: 0 });
+      } catch (reason) { setError(`Scene ${index + 1}: ${reason instanceof Error ? reason.message : "Upload failed."}`); }
+      finally {
+        slots.current--;
+        waiting.current.shift()?.();
+        setUploads((current) => { const { [index]: _done, ...rest } = current; void _done; return rest; });
+      }
+    })();
+    pending.current = [...pending.current, task];
+  };
+  // Several clips at once: sorted by file name and given to the scenes that have no clip yet, in order.
+  const uploadMany = (files: readonly File[]) => {
+    const free = draft.scenes.flatMap((scene: any, index: number) => !scene.sceneVideoAssetId && uploads[index] === undefined ? [index] : []);
+    const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    sorted.slice(0, free.length).forEach((file, at) => uploadClip(free[at]!, file));
+    if (sorted.length > free.length) setError(`${sorted.length - free.length} clip${sorted.length - free.length === 1 ? " was" : "s were"} not used: only ${free.length} scene${free.length === 1 ? " has" : "s have"} no clip yet.`);
   };
   const setScene = (index: number, field: string, value: unknown) => set("scenes", draft.scenes.map((scene: any, at: number) => at === index ? { ...scene, [field]: value } : scene));
   const move = (index: number, step: number) => {
@@ -96,7 +119,10 @@ function PlanEditor({ video, photos, targetMs, onSaved, onCancel }: Readonly<{ v
   };
   const save = async () => {
     setSaving(true); setError("");
-    try { await api(`/api/videos/${video.id}/plan`, "PUT", draft); await onSaved(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not save the plan."); } finally { setSaving(false); }
+    try {
+      await Promise.allSettled(pending.current);
+      await api(`/api/videos/${video.id}/plan`, "PUT", latest.current); await onSaved();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not save the plan."); } finally { setSaving(false); }
   };
   return <article className="plan-card plan-editor">
     <div className="find-replace">
@@ -120,6 +146,9 @@ function PlanEditor({ video, photos, targetMs, onSaved, onCancel }: Readonly<{ v
     </div>
     <label>Voice delivery<input value={draft.voiceStyle ?? ""} maxLength={200} placeholder="excited, fast, like telling a friend" onChange={(event) => set("voiceStyle", event.target.value)} /></label>
     <b>Scenes</b>
+    <label className="upload-label upload-many">Upload several Kling clips at once (they go to the scenes without a clip, in file-name order; keep editing while they upload)
+      <input type="file" multiple accept="video/mp4,video/quicktime,video/webm" onChange={(event) => { const files = [...(event.target.files ?? [])]; event.target.value = ""; if (files.length) uploadMany(files); }} /></label>
+    {uploadCount > 0 && <p className="muted small">Uploading {uploadCount} clip{uploadCount === 1 ? "" : "s"} in the background…</p>}
     <ol className="scene-editor">{draft.scenes.map((scene: any, index: number) => <li key={index}>
       <b className="scene-number">Scene {index + 1} · {seconds(scene.durationMs)}{scene.caption ? ` · "${scene.caption}"` : ""}</b>
       {scene.sceneImageAssetId
@@ -133,7 +162,9 @@ function PlanEditor({ video, photos, targetMs, onSaved, onCancel }: Readonly<{ v
             <small className="muted">Uses {seconds(scene.durationMs)} of this {seconds(scene.videoDurationMs ?? 0)} clip, from {seconds(scene.videoStartMs ?? 0)}.{(scene.videoStartMs ?? 0) + scene.durationMs > (scene.videoDurationMs ?? Infinity) ? " The clip ends early; its last frame is held." : ""}</small>
             <button type="button" onClick={() => patchScene(index, { sceneVideoAssetId: undefined, videoStartMs: undefined, videoDurationMs: undefined })}>Remove video</button>
           </div></>
-        : <label className="upload-label">{uploading === index ? (uploadPercent < 100 ? `Uploading… ${uploadPercent}%` : "Saving…") : "Scene video from Kling (MP4, replaces the image)"}<input type="file" accept="video/mp4,video/quicktime,video/webm" disabled={uploading >= 0} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void uploadClip(index, file); }} /></label>}
+        : uploads[index] !== undefined
+          ? <p className="upload-label">{uploads[index]! === 0 ? "Waiting to upload…" : uploads[index]! < 100 ? `Uploading… ${uploads[index]}%` : "Saving…"}</p>
+          : <label className="upload-label">Scene video from Kling (MP4, replaces the image)<input type="file" accept="video/mp4,video/quicktime,video/webm" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) uploadClip(index, file); }} /></label>}
       </div>
       <label>On-screen text (caption)<input value={scene.caption} maxLength={80} onChange={(event) => setScene(index, "caption", event.target.value)} /></label>
       <div className="scene-row">
@@ -148,15 +179,15 @@ function PlanEditor({ video, photos, targetMs, onSaved, onCancel }: Readonly<{ v
       </div>
       <label>Spoken in this scene<textarea rows={2} value={scene.voiceLine ?? ""} maxLength={300} onChange={(event) => setScene(index, "voiceLine", event.target.value)} /></label>
       <div className="scene-row">
-        <button type="button" disabled={index === 0} onClick={() => move(index, -1)}>↑ Up</button>
-        <button type="button" disabled={index === draft.scenes.length - 1} onClick={() => move(index, 1)}>↓ Down</button>
-        <button type="button" className="danger" disabled={draft.scenes.length <= 2} onClick={() => set("scenes", draft.scenes.filter((_: any, at: number) => at !== index))}>Remove</button>
+        <button type="button" disabled={index === 0 || uploadCount > 0} onClick={() => move(index, -1)}>↑ Up</button>
+        <button type="button" disabled={index === draft.scenes.length - 1 || uploadCount > 0} onClick={() => move(index, 1)}>↓ Down</button>
+        <button type="button" className="danger" disabled={draft.scenes.length <= 2 || uploadCount > 0} onClick={() => set("scenes", draft.scenes.filter((_: any, at: number) => at !== index))}>Remove</button>
       </div>
     </li>)}</ol>
-    <button type="button" disabled={draft.scenes.length >= 8} onClick={() => set("scenes", [...draft.scenes, { ...draft.scenes.at(-1), caption: "" }])}>+ Add scene</button>
-    <p className="muted small">Scene videos are uploaded right away and used once you click Save plan. Seconds set how long each scene lasts compared with the others; the video is stretched to fit the voiceover.</p>
+    <button type="button" disabled={draft.scenes.length >= 8 || uploadCount > 0} onClick={() => set("scenes", [...draft.scenes, { ...draft.scenes.at(-1), caption: "" }])}>+ Add scene</button>
+    <p className="muted small">Scene videos are uploaded right away and used once you click Save plan (it waits for uploads still running). Seconds set how long each scene lasts compared with the others; the video is stretched to fit the voiceover.</p>
     {error && <p className="error small" role="alert">{error}</p>}
-    <div className="scene-row"><button className="primary" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Save plan"}</button><button type="button" disabled={saving} onClick={onCancel}>Cancel</button></div>
+    <div className="scene-row"><button className="primary" disabled={saving} onClick={() => void save()}>{saving ? (uploadCount ? `Saving after ${uploadCount} upload${uploadCount === 1 ? "" : "s"}…` : "Saving…") : "Save plan"}</button><button type="button" disabled={saving} onClick={() => { if (!uploadCount || window.confirm("Clips are still uploading. Leave without saving them to this plan?")) onCancel(); }}>Cancel</button></div>
   </article>;
 }
 
