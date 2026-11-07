@@ -136,6 +136,23 @@ export function buildServer(runtime: Runtime = createRuntime()) {
   app.delete("/api/video-batches/:id",async(request)=>{await runtime.winnerVideos.deleteBatch((request.params as{id:string}).id);return{deleted:true};});
   app.post("/api/videos/:id/ad-copy",async(request)=>runtime.winnerVideos.writeAdCopy((request.params as{id:string}).id));
   app.put("/api/videos/:id/ad-copy",async(request)=>runtime.winnerVideos.saveAdCopy((request.params as{id:string}).id,body(z.object({primaryTexts:z.array(z.string().max(2000)).max(5),headlines:z.array(z.string().max(200)).max(5),description:z.string().max(200),callToAction:z.string().max(40)}),request.body)));
+  // Clips go from the browser straight to S3 (the Cloudflare route is slow for uploads); the server then checks them.
+  const clipTypes:Record<string,string>={"video/mp4":"mp4","video/quicktime":"mov","video/webm":"webm"};
+  app.post("/api/videos/:id/scene-clips/upload",async(request)=>{
+    if(!runtime.durableMediaStore)throw new DomainError("DIRECT_UPLOAD_DISABLED","Direct durable upload is not enabled.");
+    const input=body(z.object({filename:z.string().trim().min(1).max(255),mimeType:z.enum(["video/mp4","video/quicktime","video/webm"]),byteSize:z.number().int().positive().max(uploadLimit),sha256:z.string().regex(/^[a-f0-9]{64}$/)}),request.body);
+    const{productId}=await runtime.winnerVideos.sceneClipTarget((request.params as{id:string}).id);
+    const target=await runtime.durableMediaStore.createUpload({projectId:productId,purpose:"SCENE_VIDEO",kind:"VIDEO",mimeType:input.mimeType,extension:clipTypes[input.mimeType]!,byteSize:input.byteSize,sha256:input.sha256,originalFilename:input.filename,metadata:{projectId:productId,uploadedBy:actor(request)}});
+    return{assetId:target.asset.id,method:target.method,url:target.url,headers:target.headers};
+  });
+  app.post("/api/videos/:id/scene-clips/complete",async(request)=>{
+    if(!runtime.durableMediaStore)throw new DomainError("DIRECT_UPLOAD_DISABLED","Direct durable upload is not enabled.");
+    const{assetId}=body(z.object({assetId:z.string().uuid()}),request.body);
+    const started=Date.now();
+    const asset=await runtime.durableMediaStore.completeUpload(assetId);
+    try{const result=await runtime.winnerVideos.attachSceneClip((request.params as{id:string}).id,asset.id);request.log.info({megabytes:Math.round(asset.byteSize/1e5)/10,checkMs:Date.now()-started},"scene clip uploaded directly");return result;}
+    catch(error){await runtime.durableMediaStore.rejectUpload(asset.id,"Scene clip check failed.").catch(()=>undefined);throw error;}
+  });
   app.post("/api/videos/:id/scene-clips",async(request)=>{
     const part=await request.file();
     if(!part)throw new DomainError("UPLOAD_REQUIRED","Choose a video file.");

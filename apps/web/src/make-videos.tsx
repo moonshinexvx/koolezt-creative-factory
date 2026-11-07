@@ -39,6 +39,50 @@ function CopyPrompt({ label, text, rules }: Readonly<{ label: string; text?: str
   return <div className="scene-prompt"><div><b>{label}</b><button type="button" title="Copies the full prompt including the product rules" onClick={() => void navigator.clipboard.writeText(`${rules}\n\nScene: ${text}`).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button></div><p>{text}</p></div>;
 }
 
+async function sha256Hex(file: File) {
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** Sends a file to a signed storage URL with upload progress. */
+function putWithProgress(url: string, headers: Record<string, string>, file: File, onProgress: (percent: number) => void) {
+  return new Promise<void>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("PUT", url);
+    for (const [header, value] of Object.entries(headers)) request.setRequestHeader(header, value);
+    request.upload.onprogress = (event) => { if (event.lengthComputable) onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100))); };
+    request.onerror = () => reject(new Error("Upload failed. Check the connection and try again."));
+    request.onload = () => (request.status >= 200 && request.status < 300 ? resolve() : reject(new Error(`Upload failed with HTTP ${request.status}.`)));
+    request.send(file);
+  });
+}
+
+/**
+ * Uploads a scene clip straight to storage (much faster than through the app's Cloudflare route), then lets the server
+ * check it. Falls back to posting it through the app when direct upload is not set up (local development).
+ */
+async function uploadClipFile(videoId: string, file: File, onProgress: (percent: number) => void): Promise<{ assetId: string; durationMs: number }> {
+  const type = file.type || (file.name.toLowerCase().endsWith(".mov") ? "video/quicktime" : file.name.toLowerCase().endsWith(".webm") ? "video/webm" : "video/mp4");
+  let target: any;
+  try {
+    target = await api(`/api/videos/${videoId}/scene-clips/upload`, "POST", { filename: file.name, mimeType: type, byteSize: file.size, sha256: await sha256Hex(file) });
+  } catch (reason) {
+    if (!(reason instanceof Error) || !reason.message.includes("Direct durable upload is not enabled")) throw reason;
+    const form = new FormData();
+    form.append("file", file);
+    return postWithProgress(`/api/videos/${videoId}/scene-clips`, form, onProgress);
+  }
+  try { await putWithProgress(target.url, target.headers, file, onProgress); }
+  catch {
+    // Storage refused the browser (network or CORS): send it through the app instead, slower but it works.
+    const form = new FormData();
+    form.append("file", file);
+    return postWithProgress(`/api/videos/${videoId}/scene-clips`, form, onProgress);
+  }
+  onProgress(100);
+  return api(`/api/videos/${videoId}/scene-clips/complete`, "POST", { assetId: target.assetId });
+}
+
 /** Posts a form with upload progress (fetch cannot report it); resolves with the JSON answer. */
 function postWithProgress(url: string, form: FormData, onProgress: (percent: number) => void): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -90,9 +134,7 @@ function PlanEditor({ video, photos, targetMs, onSaved, onCancel }: Readonly<{ v
       if (slots.current >= 2) await new Promise<void>((resolve) => waiting.current.push(resolve));
       slots.current++;
       try {
-        const form = new FormData();
-        form.append("file", file);
-        const json = await postWithProgress(`/api/videos/${video.id}/scene-clips`, form, (percent) => setUploads((current) => ({ ...current, [index]: percent })));
+        const json = await uploadClipFile(video.id, file, (percent) => setUploads((current) => ({ ...current, [index]: percent })));
         patchScene(index, { sceneVideoAssetId: json.assetId, videoDurationMs: json.durationMs, videoStartMs: 0 });
       } catch (reason) { setError(`Scene ${index + 1}: ${reason instanceof Error ? reason.message : "Upload failed."}`); }
       finally {

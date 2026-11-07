@@ -511,4 +511,24 @@ describe("winner to videos", () => {
     const args = buildPlanVideoArguments({ scenes: [{ photoPath: "a.jpg", photoWidth: 100, photoHeight: 100, motion: "ZOOM_IN", caption: "", durationMs: 15_000 }], sceneMs: [15_000], totalMs: 15_000, voicePath: "v.mp3", outputPath: "o.mp4", fontPath: "f.ttf", textLayers: [], threads: 1, voiceTempo: 1.1 });
     expect(args.join(" ")).toContain("atempo=1.100,adelay=");
   });
+
+  it("attaches a clip the browser uploaded straight to storage, and refuses one from another product", async () => {
+    const setup = await harness({ renderer: new PlanVideoRenderer({ ffmpegPath: ffmpeg, ffprobePath: ffprobe }) });
+    try {
+      await setup.dnaService.requestAnalysis(setup.reference.id, crypto.randomUUID());
+      await setup.drain();
+      const batch = await setup.service.requestPlans({ referenceId: setup.reference.id, count: 3, durationSeconds: 15, actor: "owner" });
+      await setup.drain();
+      const [video] = await setup.videos.listVideos(batch.id);
+      const clipBytes = new Uint8Array(await readFile(resolve("tests/fixtures/vertical-1080x1920.mp4")));
+      const mine = await setup.storage.put("clip.mp4", { bytes: clipBytes, mimeType: "video/mp4", extension: "mp4", metadata: { projectId: setup.product.id, purpose: "SCENE_VIDEO" } });
+      expect(await setup.service.sceneClipTarget(video!.id)).toEqual({ productId: setup.product.id });
+      const attached = await setup.service.attachSceneClip(video!.id, mine.id);
+      expect(attached.assetId).toBe(mine.id);
+      expect(attached.durationMs).toBeGreaterThan(500);
+      expect((await setup.videos.getVideo(video!.id)).plan.uploadedClipIds).toContain(mine.id);
+      const other = await setup.storage.put("other.mp4", { bytes: clipBytes, mimeType: "video/mp4", extension: "mp4", metadata: { projectId: crypto.randomUUID(), purpose: "SCENE_VIDEO" } });
+      await expect(setup.service.attachSceneClip(video!.id, other.id)).rejects.toMatchObject({ code: "SCENE_CLIP_INVALID" });
+    } finally { await setup.dispose(); }
+  }, 60_000);
 });

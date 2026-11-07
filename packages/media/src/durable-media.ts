@@ -26,7 +26,7 @@ import type {
 import { FfprobeMediaInspector } from "./index.js";
 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
-const allowedExtension = /^(?:mp4|webm|mp3|wav|aac|png|jpe?g|webp)$/;
+const allowedExtension = /^(?:mp4|mov|webm|mp3|wav|aac|png|jpe?g|webp)$/;
 const controlledKey = /^creative-factory\/(working|final)\/[0-9a-f-]{36}\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.[a-z0-9]+$/;
 
 export interface DurableAssetCatalog {

@@ -444,24 +444,54 @@ export class WinnerVideoService {
   }
 
   /** Stores a clip the owner made elsewhere (for example in the Kling app) so a scene can use it; the editor then picks the scene and start time. */
-  async uploadSceneClip(videoId: string, file: Readonly<{ bytes: Uint8Array; mimeType: string; extension: string; filename: string }>): Promise<Readonly<{ assetId: string; durationMs: number }>> {
+  /** The product a video's clips are stored under; refuses while the video is being made. */
+  async sceneClipTarget(videoId: string): Promise<Readonly<{ productId: string }>> {
     const video = await this.d.videos.getVideo(videoId);
     if (video.status === "QUEUED" || video.status === "RENDERING") throw new DomainError("VIDEO_BUSY", "This video is being made. Upload clips after it finishes.");
-    const batch = await this.d.videos.getBatch(video.batchId);
+    return { productId: (await this.d.videos.getBatch(video.batchId)).productId };
+  }
+
+  /** Length of a clip in ms; refuses files that are not a playable video of at least half a second. */
+  private async clipDuration(bytes: Uint8Array, extension: string): Promise<number> {
     const root = await mkdtemp(join(tmpdir(), "koolezt-clip-"));
-    let durationMs = 0;
     try {
-      const path = join(root, `clip.${file.extension}`);
-      await writeFile(path, file.bytes);
+      const path = join(root, `clip.${extension}`);
+      await writeFile(path, bytes);
       const probed = await this.d.renderer.probe(path).catch(() => ({} as Readonly<{ width?: number; durationMs?: number }>));
       if (!probed.width || !probed.durationMs || probed.durationMs < 500) throw new DomainError("SCENE_CLIP_INVALID", "This file is not a playable video of at least half a second.");
-      durationMs = probed.durationMs;
+      return probed.durationMs;
     } finally {
       await rm(root, { recursive: true, force: true });
     }
-    const asset = await this.d.storage.put(`scene-videos/${video.id}/${randomUUID()}.${file.extension}`, { bytes: file.bytes, mimeType: file.mimeType, extension: file.extension, metadata: { projectId: batch.productId, purpose: "SCENE_VIDEO", originalFilename: file.filename.slice(0, 255) } });
+  }
+
+  private async recordClip(videoId: string, assetId: string) {
     const latest = await this.d.videos.getVideo(videoId);
-    await this.d.videos.updateVideo({ ...latest, plan: { ...latest.plan, uploadedClipIds: [...(latest.plan.uploadedClipIds ?? []), asset.id] }, updatedAt: this.now() });
+    await this.d.videos.updateVideo({ ...latest, plan: { ...latest.plan, uploadedClipIds: [...(latest.plan.uploadedClipIds ?? []), assetId] }, updatedAt: this.now() });
+  }
+
+  /** Clip sent through the app server (local storage, or when direct upload is not available). */
+  async uploadSceneClip(videoId: string, file: Readonly<{ bytes: Uint8Array; mimeType: string; extension: string; filename: string }>): Promise<Readonly<{ assetId: string; durationMs: number }>> {
+    const { productId } = await this.sceneClipTarget(videoId);
+    const durationMs = await this.clipDuration(file.bytes, file.extension);
+    const asset = await this.d.storage.put(`scene-videos/${videoId}/${randomUUID()}.${file.extension}`, { bytes: file.bytes, mimeType: file.mimeType, extension: file.extension, metadata: { projectId: productId, purpose: "SCENE_VIDEO", originalFilename: file.filename.slice(0, 255) } });
+    await this.recordClip(videoId, asset.id);
+    return { assetId: asset.id, durationMs };
+  }
+
+  /** Clip the browser uploaded straight to storage: checked to be this product's scene video and a playable file. */
+  async attachSceneClip(videoId: string, assetId: string): Promise<Readonly<{ assetId: string; durationMs: number }>> {
+    const { productId } = await this.sceneClipTarget(videoId);
+    const asset = await this.d.storage.getAsset(assetId);
+    const purpose = asset.purpose ?? asset.metadata?.purpose;
+    const owner = asset.projectId === productId || asset.metadata?.projectId === productId || asset.storageKey.includes(`/${productId}/`);
+    if (purpose !== "SCENE_VIDEO" || !owner) throw new DomainError("SCENE_CLIP_INVALID", "This upload does not belong to this video.");
+    const bytes = await this.d.storage.read(asset.storageKey);
+    const extension = asset.storageKey.split(".").at(-1) ?? "mp4";
+    const signature = extension === "webm" ? bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3 : String.fromCharCode(...bytes.subarray(4, 8)) === "ftyp";
+    if (!signature) throw new DomainError("INVALID_MEDIA_SIGNATURE", "File content does not match its declared media type.");
+    const durationMs = await this.clipDuration(bytes, extension);
+    await this.recordClip(videoId, asset.id);
     return { assetId: asset.id, durationMs };
   }
 
